@@ -391,11 +391,12 @@
           color: tetraColors[index],
           roughness: 0.34,
           metalness: 0.08,
-          side: THREE.FrontSide
+          side: THREE.DoubleSide
         });
         const mesh = makeTriangleMesh(a, b, c, mat);
         tetraGroup.add(mesh);
-        tetraGroup.add(makeEdgeLine([a, b, c], 0x05070b, 0.55));
+        const edge = makeEdgeLine([a, b, c], 0x05070b, 0.55);
+        tetraGroup.add(edge);
 
         const label = makeTextPlane(`T${index + 1}`, {
           color: index === 1 ? '#1a1200' : '#06100e',
@@ -405,7 +406,7 @@
         attachLabelToTriangle(label, a, b, c, normal, 0.018);
         tetraGroup.add(label);
 
-        tetraFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, label });
+        tetraFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, edge, label });
       });
     }
 
@@ -493,10 +494,11 @@
       return tetraFaces[faceIndex].normal.clone().transformDirection(tetraGroup.matrixWorld).normalize();
     }
 
-    function updateTetraFaceVisibility() {
+    function updateTetraFaceVisibility({ hideBottom = true } = {}) {
       tetraFaces.forEach((face, i) => {
-        const isBottom = i === currentTetraBottomFaceIndex;
+        const isBottom = hideBottom && i === currentTetraBottomFaceIndex;
         face.mesh.visible = !isBottom;
+        face.edge.visible = !isBottom;
         face.label.visible = !isBottom;
       });
     }
@@ -647,6 +649,10 @@
       if (!rollState) return;
 
       isAnimating = true;
+      // Durante la rodadura mostramos todas las caras opacas. La cara que estaba abajo
+      // deja de estar apoyada en cuanto empieza a girar, así evitamos que aparezca como
+      // una superficie fantasma/transparente y que el número surja a mitad de movimiento.
+      updateTetraFaceVisibility({ hideBottom: false });
 
       // La clave: la bisagra NO es una aproximación sobre la arista del octaedro.
       // Es la arista real del tetraedro que ahora está apoyada sobre esa arista.
