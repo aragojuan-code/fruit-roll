@@ -438,6 +438,9 @@
     ];
 
     const tetraFaces = [];
+    const tetraBottomFaceIndexByTop = [3, 2, 1, 0];
+    const showDebugHelpers = true;
+    const debugArrows = {};
 
     function buildTetrahedron() {
       tetraGroup.clear();
@@ -447,8 +450,14 @@
         const a = rawTetraVertices[ids[0]].clone();
         const b = rawTetraVertices[ids[1]].clone();
         const c = rawTetraVertices[ids[2]].clone();
-        const normal = faceNormal(a, b, c);
+        let normal = faceNormal(a, b, c);
         const center = faceCenter(a, b, c);
+        if (normal.dot(center) < 0) {
+          [ids[1], ids[2]] = [ids[2], ids[1]];
+          b.copy(rawTetraVertices[ids[1]]);
+          c.copy(rawTetraVertices[ids[2]]);
+          normal = faceNormal(a, b, c);
+        }
 
         const mat = new THREE.MeshStandardMaterial({
           color: tetraColors[index],
@@ -471,13 +480,12 @@
         label.position.copy(center).addScaledVector(normal, 0.022);
         tetraGroup.add(label);
 
-        tetraFaces.push({ index, ids, center, normal, mesh, label });
+        tetraFaces.push({ index, ids: [...ids], center, normal, mesh, label });
       });
     }
 
     buildTetrahedron();
 
-    const downLocalTetraFaceIndex = 0;
     let currentOctaFaceIndex = 0;
     let currentTetraBottomFaceIndex = 0;
     let tetraOrientation = 'provisional';
@@ -492,22 +500,47 @@
       return tetraFaces[faceIndex].center.clone().applyMatrix4(tetraGroup.matrixWorld);
     }
 
-    function alignTetraToOctaFace(faceIndex, preserveSpin = false) {
-      const face = octaFaces[faceIndex];
-      const targetBottomNormal = face.normal.clone();
-      const localBottomNormal = tetraFaces[downLocalTetraFaceIndex].normal.clone();
+    function initDebugHelpers() {
+      if (!showDebugHelpers) return;
+      debugArrows.octa = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), 0.8, 0x49f0b4, 0.14, 0.09);
+      debugArrows.tetra = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), 0.7, 0xff5478, 0.12, 0.08);
+      scene.add(debugArrows.octa);
+      scene.add(debugArrows.tetra);
+    }
 
-      const q = new THREE.Quaternion().setFromUnitVectors(localBottomNormal, targetBottomNormal);
+    function getBottomFaceIndexForOctaFace(octaFaceIndex) {
+      const topVertexId = octaFaces[octaFaceIndex].ids.find(id => octaVertices[id].y > 0);
+      return tetraBottomFaceIndexByTop[topVertexId ?? 0];
+    }
 
-      if (preserveSpin) {
-        // Reserved for future real orientation logic.
-      }
+    function placeTetraOnOctaFace(octaFaceIndex, tetraBottomFaceIndex, optionalSpin = 0) {
+      const face = octaFaces[octaFaceIndex];
+      const octaNormal = face.normal.clone();
+      const tetraBottomLocalNormal = tetraFaces[tetraBottomFaceIndex].normal.clone();
 
-      tetraGroup.quaternion.copy(q);
-      const bottomCenterWorld = tetraFaces[downLocalTetraFaceIndex].center.clone().applyQuaternion(tetraGroup.quaternion);
-      const targetBottomCenter = face.center.clone().addScaledVector(face.normal, SURFACE_GAP);
+      const alignQ = new THREE.Quaternion().setFromUnitVectors(tetraBottomLocalNormal, octaNormal.clone().negate());
+      const spinQ = new THREE.Quaternion().setFromAxisAngle(octaNormal, optionalSpin);
+      tetraGroup.quaternion.copy(spinQ.multiply(alignQ));
+
+      const bottomCenterWorld = tetraFaces[tetraBottomFaceIndex].center.clone().applyQuaternion(tetraGroup.quaternion);
+      const targetBottomCenter = face.center.clone().addScaledVector(octaNormal, SURFACE_GAP);
       tetraGroup.position.copy(targetBottomCenter.sub(bottomCenterWorld));
       tetraGroup.updateMatrixWorld(true);
+
+      const tetraBottomNormal = getTetraFaceWorldNormal(tetraBottomFaceIndex);
+      if (showDebugHelpers && debugArrows.octa && debugArrows.tetra) {
+        debugArrows.octa.position.copy(face.center);
+        debugArrows.octa.setDirection(octaNormal.clone());
+        debugArrows.tetra.position.copy(getTetraFaceWorldCenter(tetraBottomFaceIndex));
+        debugArrows.tetra.setDirection(tetraBottomNormal.clone());
+      }
+      console.log('Apoyo tetra-octa', {
+        currentOctaFace: `O${octaFaceIndex + 1}`,
+        octaNormal: octaNormal.toArray().map(v => Number(v.toFixed(4))),
+        tetraBottomFace: `T${tetraBottomFaceIndex + 1}`,
+        tetraBottomNormal: tetraBottomNormal.toArray().map(v => Number(v.toFixed(4))),
+        dot: Number(tetraBottomNormal.dot(octaNormal.clone().negate()).toFixed(6))
+      });
     }
 
     function updateTetraLabelsFacing() {
@@ -571,20 +604,9 @@
 
       const startPos = tetraGroup.position.clone();
       const startQuat = tetraGroup.quaternion.clone();
-
-      // End pose: visually correct resting pose on the destination face.
-      const savedPos = tetraGroup.position.clone();
-      const savedQuat = tetraGroup.quaternion.clone();
-      alignTetraToOctaFace(targetFaceIndex, true);
-      const endPos = tetraGroup.position.clone();
-      const endQuat = tetraGroup.quaternion.clone();
-      tetraGroup.position.copy(savedPos);
-      tetraGroup.quaternion.copy(savedQuat);
-      tetraGroup.updateMatrixWorld(true);
-
       const rollAngle = fromFace.normal.angleTo(toFace.normal);
-      const rollSign = Math.sign(new THREE.Vector3().crossVectors(fromFace.normal, toFace.normal).dot(edgeDir)) || 1;
       const axis = edgeDir.clone();
+      const edgePivot = edgeA.clone().add(edgeB).multiplyScalar(0.5);
 
       const duration = 520;
       const startTime = performance.now();
@@ -602,29 +624,33 @@
         const rawT = Math.min(1, (now - startTime) / duration);
         const t = easeInOutCubic(rawT);
 
-        // Main pose interpolation, stable and readable.
-        tetraGroup.position.lerpVectors(startPos, endPos, t);
-        tetraGroup.quaternion.slerpQuaternions(startQuat, endQuat, t);
+        const stepAngle = rollAngle * t;
+        tetraGroup.quaternion.copy(startQuat);
+        tetraGroup.position.copy(startPos);
+        tetraGroup.updateMatrixWorld(true);
 
-        // Add a small arcing lift so it feels like a roll instead of a slide.
-        const lift = Math.sin(Math.PI * t) * 0.15;
-        const blendedNormal = fromFace.normal.clone().lerp(toFace.normal, t).normalize();
-        tetraGroup.position.addScaledVector(blendedNormal, lift);
-
-        // Subtle extra rotation around the shared edge for physical feeling.
-        const extra = new THREE.Quaternion().setFromAxisAngle(axis, rollSign * rollAngle * Math.sin(Math.PI * t) * 0.08);
-        tetraGroup.quaternion.premultiply(extra);
+        const delta = new THREE.Quaternion().setFromAxisAngle(axis, stepAngle);
+        tetraGroup.quaternion.premultiply(delta);
+        tetraGroup.position.sub(edgePivot).applyQuaternion(delta).add(edgePivot);
+        tetraGroup.updateMatrixWorld(true);
 
         if (rawT < 1) {
           requestAnimationFrame(animate);
         } else {
           currentOctaFaceIndex = targetFaceIndex;
-
-          // Provisional face update: next prompt should replace this with exact tetrahedral orientation logic.
-          currentTetraBottomFaceIndex = (currentTetraBottomFaceIndex + 1) % 4;
+          const octaTargetNormal = toFace.normal.clone();
+          let bestFace = 0;
+          let minDot = Infinity;
+          for (let i = 0; i < tetraFaces.length; i++) {
+            const d = getTetraFaceWorldNormal(i).dot(octaTargetNormal);
+            if (d < minDot) {
+              minDot = d;
+              bestFace = i;
+            }
+          }
+          currentTetraBottomFaceIndex = bestFace;
           tetraOrientation = `provisional-${moves + 1}`;
-
-          alignTetraToOctaFace(currentOctaFaceIndex, true);
+          placeTetraOnOctaFace(currentOctaFaceIndex, currentTetraBottomFaceIndex);
           moves += 1;
           updateFaceMaterials();
           updateHUD();
@@ -679,7 +705,8 @@
       tetraOrientation = 'provisional';
       moves = 0;
       isAnimating = false;
-      alignTetraToOctaFace(currentOctaFaceIndex);
+      currentTetraBottomFaceIndex = getBottomFaceIndexForOctaFace(currentOctaFaceIndex);
+      placeTetraOnOctaFace(currentOctaFaceIndex, currentTetraBottomFaceIndex);
       updateFaceMaterials();
       updateHUD();
       console.clear();
@@ -708,6 +735,7 @@
     }
 
     addAtmosphere();
+    initDebugHelpers();
     resetGame();
 
     function onResize() {
