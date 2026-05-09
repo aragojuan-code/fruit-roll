@@ -103,19 +103,18 @@
   <div class="hud">
     <div class="title">
       <strong>Tetra sobre Octaedro</strong>
-      <span>Click/tap en una cara vecina para rodar</span>
+      <span>Arrastra para girar cámara · tap corto en cara vecina para rodar</span>
     </div>
     <div class="stats">
       <div class="pill">Octa: <b id="octaFace">O1</b></div>
       <div class="pill">Tetra abajo: <b id="tetraFace">T1</b></div>
-      <div class="pill">Spin: <b id="spinFace">0</b></div>
       <div class="pill">Movs: <b id="moves">0</b></div>
       <button id="resetBtn">Reset</button>
     </div>
   </div>
 
   <div class="hint">
-    El tetraedro está apoyado por fuera: la cara inferior se oculta. Pulsa solo caras verdes vecinas. Rueda visual por ahora; el estado final encaja triángulo contra triángulo.
+    El conjunto está a media escala. Tap corto = mover tetraedro. Arrastrar = solo rotar cámara.
   </div>
 
   <script type="importmap">
@@ -134,7 +133,6 @@
     const app = document.getElementById('app');
     const octaFaceEl = document.getElementById('octaFace');
     const tetraFaceEl = document.getElementById('tetraFace');
-    const spinFaceEl = document.getElementById('spinFace');
     const movesEl = document.getElementById('moves');
     const resetBtn = document.getElementById('resetBtn');
 
@@ -142,7 +140,7 @@
     scene.fog = new THREE.Fog(0x070a10, 8, 18);
 
     const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 100);
-    camera.position.set(4.4, 3.2, 5.2);
+    camera.position.set(3.6, 2.6, 4.2);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -154,8 +152,8 @@
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.target.set(0, 0, 0);
-    controls.minDistance = 3.6;
-    controls.maxDistance = 10;
+    controls.minDistance = 2.5;
+    controls.maxDistance = 7.5;
     controls.enablePan = false;
 
     scene.add(new THREE.HemisphereLight(0x99bbff, 0x111018, 1.8));
@@ -174,10 +172,11 @@
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
-    const OCTA_R = 2.15;
+    // Media escala respecto a la versión anterior.
+    const OCTA_R = 1.075;
     const OCTA_EDGE = OCTA_R * Math.sqrt(2);
     const TETRA_CIRCUMRADIUS = OCTA_EDGE / Math.sqrt(8 / 3); // tetra edge == octa face edge
-    const SURFACE_GAP = 0.012;
+    const SURFACE_GAP = 0.008;
 
     const octaColors = [0x29374e, 0x314463, 0x263e56, 0x3d315b, 0x203f3a, 0x4c362d, 0x323d55, 0x442f4d];
     const tetraColors = [0xff5478, 0xffd166, 0x49f0b4, 0x75a7ff];
@@ -304,8 +303,8 @@
         boardGroup.add(mesh);
         boardGroup.add(makeEdgeLine([a, b, c], 0xffffff, 0.18));
 
-        const label = makeTextSprite(`O${index + 1}`, { color: '#eef5ff', fontSize: 74, scale: 0.33 });
-        label.position.copy(center).addScaledVector(normal, 0.035);
+        const label = makeTextSprite(`O${index + 1}`, { color: '#eef5ff', fontSize: 66, scale: 0.20 });
+        label.position.copy(center).addScaledVector(normal, 0.022);
         boardGroup.add(label);
 
         octaFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, material, label, neighbors: [] });
@@ -374,7 +373,7 @@
           color: tetraColors[index],
           roughness: 0.34,
           metalness: 0.08,
-          side: THREE.FrontSide // CLAVE: la cara apoyada no debe verse como una losa encima del octaedro.
+          side: THREE.FrontSide
         });
         const mesh = makeTriangleMesh(a, b, c, mat);
         tetraGroup.add(mesh);
@@ -382,10 +381,10 @@
 
         const label = makeTextSprite(`T${index + 1}`, {
           color: index === 1 ? '#1a1200' : '#06100e',
-          fontSize: 68,
-          scale: 0.22
+          fontSize: 62,
+          scale: 0.16
         });
-        label.position.copy(center).addScaledVector(normal, 0.026);
+        label.position.copy(center).addScaledVector(normal, 0.020);
         tetraGroup.add(label);
 
         tetraFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, label });
@@ -396,66 +395,84 @@
 
     let currentOctaFaceIndex = 0;
     let currentTetraBottomFaceIndex = 0;
-    let currentSpin = 0;
     let moves = 0;
     let isAnimating = false;
 
-    function basisFromTriangle(a, b, c, desiredNormal = null) {
-      let p0 = a.clone();
-      let p1 = b.clone();
-      let p2 = c.clone();
-      let normal = faceNormal(p0, p1, p2);
-      if (desiredNormal && normal.dot(desiredNormal) < 0) {
-        const tmp = p1; p1 = p2; p2 = tmp;
-        normal = faceNormal(p0, p1, p2);
+    // Mapping actual del contacto: tetra vertex id -> octa vertex id.
+    // Esto es lo que permite saber qué cara del tetraedro cae al cruzar una arista.
+    let contactMap = new Map();
+
+    function basisFromOrderedTriangle(points, desiredNormal) {
+      const p0 = points[0].clone();
+      const p1 = points[1].clone();
+      const p2 = points[2].clone();
+      const normal = faceNormal(p0, p1, p2);
+      if (normal.dot(desiredNormal) < 0.5) {
+        console.warn('Orden de triángulo con normal inesperada', { dot: normal.dot(desiredNormal) });
       }
       const x = new THREE.Vector3().subVectors(p1, p0).normalize();
       const y = new THREE.Vector3().crossVectors(normal, x).normalize();
       const center = faceCenter(p0, p1, p2);
       const matrix = new THREE.Matrix4().makeBasis(x, y, normal);
-      return { p0, p1, p2, center, normal, matrix };
+      return { center, normal, matrix };
     }
 
-    function poseFor(octaFaceIndex, tetraBottomFaceIndex, spin = 0) {
+    function poseForMapping(octaFaceIndex, tetraBottomFaceIndex, map) {
       const octaFace = octaFaces[octaFaceIndex];
       const tetraFace = tetraFaces[tetraBottomFaceIndex];
+      const sourceIds = tetraFace.ids;
 
-      const sourceVerts = tetraFace.ids.map(id => rawTetraVertices[id].clone());
-      const source = basisFromTriangle(sourceVerts[0], sourceVerts[1], sourceVerts[2], tetraFace.normal);
+      const sourcePoints = sourceIds.map(id => rawTetraVertices[id].clone());
+      const targetPoints = sourceIds.map(tid => {
+        const oid = map.get(tid);
+        return octaVertices[oid].clone().addScaledVector(octaFace.normal, SURFACE_GAP);
+      });
 
-      // Three valid orientation spins: rotate the target triangle mapping by 0/1/2 vertices.
-      const targetIdsBase = [...octaFace.ids];
-      const spinSteps = ((spin % 3) + 3) % 3;
-      const targetIds = targetIdsBase.slice(spinSteps).concat(targetIdsBase.slice(0, spinSteps));
-      const targetVerts = targetIds.map(id => octaVertices[id].clone().addScaledVector(octaFace.normal, SURFACE_GAP));
-
-      // Bottom face exterior normal must point into the octahedron surface, i.e. -octaNormal.
-      const target = basisFromTriangle(targetVerts[0], targetVerts[1], targetVerts[2], octaFace.normal.clone().negate());
+      const source = basisFromOrderedTriangle(sourcePoints, tetraFace.normal);
+      const target = basisFromOrderedTriangle(targetPoints, octaFace.normal.clone().negate());
 
       const invSourceRot = source.matrix.clone().invert();
       const rotMatrix = target.matrix.clone().multiply(invSourceRot);
       const quat = new THREE.Quaternion().setFromRotationMatrix(rotMatrix);
       const sourceCenterRotated = source.center.clone().applyQuaternion(quat);
       const pos = target.center.clone().sub(sourceCenterRotated);
-
       return { pos, quat };
     }
 
-    function applyTetraPose(octaFaceIndex, tetraBottomFaceIndex, spin = 0) {
-      const pose = poseFor(octaFaceIndex, tetraBottomFaceIndex, spin);
-      tetraGroup.position.copy(pose.pos);
-      tetraGroup.quaternion.copy(pose.quat);
-      tetraGroup.updateMatrixWorld(true);
-      updateTetraFaceVisibility();
-      validateContact(octaFaceIndex, tetraBottomFaceIndex);
+    function makeInitialContactMap(octaFaceIndex, tetraBottomFaceIndex) {
+      const octaFace = octaFaces[octaFaceIndex];
+      const tetraFace = tetraFaces[tetraBottomFaceIndex];
+      const tids = tetraFace.ids;
+      const oids = octaFace.ids;
+
+      // Busca una correspondencia de vértices cuyo triángulo objetivo tenga normal -octaNormal.
+      const candidates = [
+        [oids[0], oids[1], oids[2]],
+        [oids[0], oids[2], oids[1]],
+        [oids[1], oids[2], oids[0]],
+        [oids[1], oids[0], oids[2]],
+        [oids[2], oids[0], oids[1]],
+        [oids[2], oids[1], oids[0]]
+      ];
+      let best = candidates[0];
+      let bestDot = -Infinity;
+      for (const cand of candidates) {
+        const pts = cand.map(id => octaVertices[id].clone().addScaledVector(octaFace.normal, SURFACE_GAP));
+        const n = faceNormal(pts[0], pts[1], pts[2]);
+        const d = n.dot(octaFace.normal.clone().negate());
+        if (d > bestDot) {
+          bestDot = d;
+          best = cand;
+        }
+      }
+
+      const map = new Map();
+      tids.forEach((tid, i) => map.set(tid, best[i]));
+      return map;
     }
 
     function getTetraFaceWorldNormal(faceIndex) {
       return tetraFaces[faceIndex].normal.clone().transformDirection(tetraGroup.matrixWorld).normalize();
-    }
-
-    function getTetraFaceWorldCenter(faceIndex) {
-      return tetraFaces[faceIndex].center.clone().applyMatrix4(tetraGroup.matrixWorld);
     }
 
     function updateTetraFaceVisibility() {
@@ -466,6 +483,15 @@
       });
     }
 
+    function applyTetraPose(octaFaceIndex, tetraBottomFaceIndex, map) {
+      const pose = poseForMapping(octaFaceIndex, tetraBottomFaceIndex, map);
+      tetraGroup.position.copy(pose.pos);
+      tetraGroup.quaternion.copy(pose.quat);
+      tetraGroup.updateMatrixWorld(true);
+      updateTetraFaceVisibility();
+      validateContact(octaFaceIndex, tetraBottomFaceIndex);
+    }
+
     function validateContact(octaFaceIndex, tetraBottomFaceIndex) {
       const octaNormal = octaFaces[octaFaceIndex].normal.clone();
       const tetraBottomNormal = getTetraFaceWorldNormal(tetraBottomFaceIndex);
@@ -473,9 +499,9 @@
       console.log('Contacto', {
         octa: `O${octaFaceIndex + 1}`,
         tetraBottom: `T${tetraBottomFaceIndex + 1}`,
-        spin: currentSpin,
         dot: Number(dot.toFixed(6)),
-        expected: 'dot cercano a 1; tetra por fuera; cara apoyada oculta'
+        contactMap: Object.fromEntries(contactMap),
+        expected: 'dot cercano a 1; cara inferior oculta; tetra por fuera'
       });
     }
 
@@ -490,7 +516,6 @@
     function updateHUD() {
       octaFaceEl.textContent = `O${currentOctaFaceIndex + 1}`;
       tetraFaceEl.textContent = `T${currentTetraBottomFaceIndex + 1}`;
-      spinFaceEl.textContent = String(currentSpin);
       movesEl.textContent = String(moves);
     }
 
@@ -506,13 +531,46 @@
       return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
 
-    function chooseNextBottomFace(currentBottomFaceIndex, sharedOctaVertexIds) {
-      // Provisional but coherent: the next bottom face must be one of the 3 faces adjacent to the current bottom face.
-      // A later version should track exact vertex-to-vertex correspondence for physically exact rolling.
-      const currentIds = tetraFaces[currentBottomFaceIndex].ids;
-      const adjacent = tetraFaces.filter(f => f.index !== currentBottomFaceIndex && f.ids.filter(id => currentIds.includes(id)).length === 2);
-      const pick = adjacent[moves % adjacent.length];
-      return pick.index;
+    function computeRollState(targetFaceIndex, neighbor) {
+      const currentBottom = tetraFaces[currentTetraBottomFaceIndex];
+      const sharedOctaIds = neighbor.edgeVertexIds;
+      const sharedTetraIds = currentBottom.ids.filter(tid => sharedOctaIds.includes(contactMap.get(tid)));
+
+      if (sharedTetraIds.length !== 2) {
+        console.error('No se encontró la arista compartida en el mapa de contacto', { sharedOctaIds, contactMap: Object.fromEntries(contactMap) });
+        return null;
+      }
+
+      const newBottomFace = tetraFaces.find(face => {
+        if (face.index === currentTetraBottomFaceIndex) return false;
+        return sharedTetraIds.every(tid => face.ids.includes(tid));
+      });
+
+      if (!newBottomFace) {
+        console.error('No se encontró la nueva cara inferior del tetraedro');
+        return null;
+      }
+
+      const targetFace = octaFaces[targetFaceIndex];
+      const targetThirdOctaId = targetFace.ids.find(oid => !sharedOctaIds.includes(oid));
+      const newThirdTetraId = newBottomFace.ids.find(tid => !sharedTetraIds.includes(tid));
+
+      const newMap = new Map();
+      sharedTetraIds.forEach(tid => newMap.set(tid, contactMap.get(tid)));
+      newMap.set(newThirdTetraId, targetThirdOctaId);
+
+      return { newBottomFaceIndex: newBottomFace.index, newMap };
+    }
+
+    function transformByAxis(point, quat, pivot) {
+      return point.clone().sub(pivot).applyQuaternion(quat).add(pivot);
+    }
+
+    function poseError(posA, quatA, posB, quatB) {
+      const posErr = posA.distanceTo(posB);
+      const qDot = Math.abs(THREE.MathUtils.clamp(quatA.dot(quatB), -1, 1));
+      const qErr = 1 - qDot;
+      return posErr + qErr * 2;
     }
 
     function rollToFace(targetFaceIndex) {
@@ -523,45 +581,58 @@
         return;
       }
 
+      const rollState = computeRollState(targetFaceIndex, neighbor);
+      if (!rollState) return;
+
       isAnimating = true;
 
       const startPos = tetraGroup.position.clone();
       const startQuat = tetraGroup.quaternion.clone();
-      const startFace = currentOctaFaceIndex;
-      const nextBottom = chooseNextBottomFace(currentTetraBottomFaceIndex, neighbor.edgeVertexIds);
-      const nextSpin = (currentSpin + 1) % 3;
-      const endPose = poseFor(targetFaceIndex, nextBottom, nextSpin);
-      const fromNormal = octaFaces[startFace].normal.clone();
-      const toNormal = octaFaces[targetFaceIndex].normal.clone();
+      const startFaceIndex = currentOctaFaceIndex;
+      const endPose = poseForMapping(targetFaceIndex, rollState.newBottomFaceIndex, rollState.newMap);
 
-      const duration = 520;
+      const edgeA = neighbor.edgePoints[0];
+      const edgeB = neighbor.edgePoints[1];
+      const axis = new THREE.Vector3().subVectors(edgeB, edgeA).normalize();
+      const pivot = edgeA.clone();
+      const angle = octaFaces[startFaceIndex].normal.angleTo(octaFaces[targetFaceIndex].normal);
+
+      // Elige automáticamente el signo de giro que deja más cerca del encaje final exacto.
+      const plusQ = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+      const minusQ = new THREE.Quaternion().setFromAxisAngle(axis, -angle);
+      const plusPos = transformByAxis(startPos, plusQ, pivot);
+      const minusPos = transformByAxis(startPos, minusQ, pivot);
+      const plusQuat = plusQ.clone().multiply(startQuat);
+      const minusQuat = minusQ.clone().multiply(startQuat);
+      const sign = poseError(plusPos, plusQuat, endPose.pos, endPose.quat) <= poseError(minusPos, minusQuat, endPose.pos, endPose.quat) ? 1 : -1;
+
+      const duration = 560;
       const startTime = performance.now();
 
-      console.log('Rodando visualmente', {
-        from: `O${startFace + 1}`,
+      console.log('Rodando por arista', {
+        from: `O${startFaceIndex + 1}`,
         to: `O${targetFaceIndex + 1}`,
         oldBottom: `T${currentTetraBottomFaceIndex + 1}`,
-        newBottom: `T${nextBottom + 1}`,
-        sharedEdge: neighbor.edgeVertexIds
+        newBottom: `T${rollState.newBottomFaceIndex + 1}`,
+        sharedEdge: neighbor.edgeVertexIds,
+        sign
       });
 
       function animateRoll(now) {
         const rawT = Math.min(1, (now - startTime) / duration);
         const t = easeInOutCubic(rawT);
-        tetraGroup.position.lerpVectors(startPos, endPose.pos, t);
-        tetraGroup.quaternion.slerpQuaternions(startQuat, endPose.quat, t);
-        const lift = Math.sin(Math.PI * t) * 0.18;
-        const blendedNormal = fromNormal.clone().lerp(toNormal, t).normalize();
-        tetraGroup.position.addScaledVector(blendedNormal, lift);
+        const q = new THREE.Quaternion().setFromAxisAngle(axis, sign * angle * t);
+        tetraGroup.position.copy(transformByAxis(startPos, q, pivot));
+        tetraGroup.quaternion.copy(q.clone().multiply(startQuat));
         tetraGroup.updateMatrixWorld(true);
 
         if (rawT < 1) {
           requestAnimationFrame(animateRoll);
         } else {
           currentOctaFaceIndex = targetFaceIndex;
-          currentTetraBottomFaceIndex = nextBottom;
-          currentSpin = nextSpin;
-          applyTetraPose(currentOctaFaceIndex, currentTetraBottomFaceIndex, currentSpin);
+          currentTetraBottomFaceIndex = rollState.newBottomFaceIndex;
+          contactMap = rollState.newMap;
+          applyTetraPose(currentOctaFaceIndex, currentTetraBottomFaceIndex, contactMap);
           moves += 1;
           updateFaceMaterials();
           updateHUD();
@@ -572,13 +643,33 @@
       requestAnimationFrame(animateRoll);
     }
 
+    // Diferencia entre rotar cámara y seleccionar cara:
+    // el movimiento solo ocurre en pointerup si fue un tap corto, no un drag.
+    let pointerStart = null;
+    const TAP_MAX_DISTANCE = 8;
+    const TAP_MAX_TIME = 450;
+
     function onPointerDown(event) {
-      if (isAnimating) return;
+      pointerStart = {
+        x: event.clientX,
+        y: event.clientY,
+        time: performance.now()
+      };
+    }
+
+    function onPointerUp(event) {
+      if (isAnimating || !pointerStart) return;
+      const dx = event.clientX - pointerStart.x;
+      const dy = event.clientY - pointerStart.y;
+      const dist = Math.hypot(dx, dy);
+      const dt = performance.now() - pointerStart.time;
+      const wasTap = dist <= TAP_MAX_DISTANCE && dt <= TAP_MAX_TIME;
+      pointerStart = null;
+      if (!wasTap) return;
+
       const rect = renderer.domElement.getBoundingClientRect();
-      const x = event.clientX;
-      const y = event.clientY;
-      pointer.x = ((x - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((y - rect.top) / rect.height) * 2 + 1;
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
       const hits = raycaster.intersectObjects(octaFaces.map(f => f.mesh), false);
       if (!hits.length) return;
@@ -594,30 +685,31 @@
     function resetGame() {
       currentOctaFaceIndex = 0;
       currentTetraBottomFaceIndex = 0;
-      currentSpin = 0;
       moves = 0;
       isAnimating = false;
+      contactMap = makeInitialContactMap(currentOctaFaceIndex, currentTetraBottomFaceIndex);
       console.clear();
-      applyTetraPose(currentOctaFaceIndex, currentTetraBottomFaceIndex, currentSpin);
+      applyTetraPose(currentOctaFaceIndex, currentTetraBottomFaceIndex, contactMap);
       updateFaceMaterials();
       updateHUD();
       console.log('Reset completo');
     }
 
     renderer.domElement.addEventListener('pointerdown', onPointerDown, { passive: true });
+    renderer.domElement.addEventListener('pointerup', onPointerUp, { passive: true });
     resetBtn.addEventListener('click', resetGame);
 
     function addAtmosphere() {
       const starGeom = new THREE.BufferGeometry();
       const positions = [];
-      for (let i = 0; i < 360; i++) {
-        const r = 10 + Math.random() * 10;
+      for (let i = 0; i < 260; i++) {
+        const r = 8 + Math.random() * 10;
         const theta = Math.random() * Math.PI * 2;
         const phi = Math.acos(THREE.MathUtils.randFloatSpread(2));
         positions.push(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
       }
       starGeom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.018, transparent: true, opacity: 0.52 });
+      const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.015, transparent: true, opacity: 0.5 });
       scene.add(new THREE.Points(starGeom, starMat));
     }
 
