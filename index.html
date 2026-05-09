@@ -614,7 +614,10 @@
       const edgeA = neighbor.edgePoints[0];
       const edgeB = neighbor.edgePoints[1];
       const axis = new THREE.Vector3().subVectors(edgeB, edgeA).normalize();
-      const pivot = edgeA.clone().add(edgeB).multiplyScalar(0.5);
+      // La bisagra real no está en el centro de la arista del octaedro, sino en la arista de contacto
+      // de la cara inferior del tetraedro. Como el tetraedro está separado por SURFACE_GAP,
+      // desplazamos el eje ligeramente hacia fuera para que al rodar no se hunda en el octaedro.
+      const pivot = edgeA.clone().addScaledVector(octaFaces[startFaceIndex].normal, SURFACE_GAP);
 
       // Ángulo principal entre caras del octaedro. La dirección se escoge contra la pose final.
       const baseAngle = fromNormal.angleTo(toNormal);
@@ -639,9 +642,10 @@
       });
 
       function correctionWeight(t) {
-        // 0 al principio: se ve la rodadura alrededor de arista.
-        // 1 al final: termina exactamente encajado, sin salto brusco.
-        const x = Math.max(0, Math.min(1, (t - 0.18) / 0.82));
+        // Mantén casi toda la animación como giro puro por arista.
+        // La corrección hacia el encaje exacto solo entra al final, para evitar que el tetraedro
+        // atraviese visualmente el octaedro a mitad de camino.
+        const x = Math.max(0, Math.min(1, (t - 0.72) / 0.28));
         return x * x * (3 - 2 * x);
       }
 
@@ -653,8 +657,9 @@
         const hingePos = transformByAxis(startPos, hingeQ, pivot);
         const hingeQuat = hingeQ.clone().multiply(startQuat);
 
-        // Pequeño arco visual para que se perciba la caída, sin alterar el encaje final.
-        const lift = Math.sin(Math.PI * rawT) * TETRA_CIRCUMRADIUS * 0.12;
+        // Arco de seguridad: mientras rueda, lo mantenemos un poco más hacia fuera.
+        // Esto evita el efecto visual de que se hunda dentro del octaedro durante la caída.
+        const lift = Math.sin(Math.PI * rawT) * TETRA_CIRCUMRADIUS * 0.34;
         const liftDir = fromNormal.clone().lerp(toNormal, rawT).normalize();
         hingePos.addScaledVector(liftDir, lift);
 
