@@ -550,7 +550,7 @@
       const tetraFace = tetraFaces[tetraBottomFaceIndex];
 
       const tetraLocalVerts = tetraFace.ids.map(id => rawTetraVertices[id].clone());
-      const tetraFrame = makeFaceFrame(tetraLocalVerts, new THREE.Vector3());
+      const tetraFrame = makeFaceFrame(tetraLocalVerts, tetraFace.center.clone().multiplyScalar(3));
 
       const octaLocalVerts = octaFace.ids.map(id => octaVertices[id].clone());
       const octaFrame = makeFaceFrame(octaLocalVerts, octaFace.normal.clone().multiplyScalar(3));
@@ -560,7 +560,7 @@
       const spinQuat = new THREE.Quaternion().setFromAxisAngle(octaFrame.normal, spinAngle);
 
       const targetX = octaFrame.xAxis.clone().applyQuaternion(spinQuat).normalize();
-      const targetNormal = octaFrame.normal.clone().negate();
+      const targetNormal = octaFrame.normal.clone();
       const targetY = new THREE.Vector3().crossVectors(targetNormal, targetX).normalize();
 
       const sourceBasis = new THREE.Matrix4().makeBasis(tetraFrame.xAxis, tetraFrame.yAxis, tetraFrame.normal);
