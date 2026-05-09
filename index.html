@@ -244,7 +244,8 @@
       metalness: 0.06,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.96
+      opacity: 0.96,
+      depthWrite: false
     };
 
     const currentMaterial = new THREE.MeshStandardMaterial({
@@ -254,7 +255,8 @@
       metalness: 0.08,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.98
+      opacity: 0.98,
+      depthWrite: false
     });
 
     const neighborMaterial = new THREE.MeshStandardMaterial({
@@ -264,7 +266,8 @@
       metalness: 0.06,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.95
+      opacity: 0.95,
+      depthWrite: false
     });
 
     function makeTextSprite(text, options = {}) {
@@ -438,7 +441,7 @@
     ];
 
     const tetraFaces = [];
-    const showDebugHelpers = true;
+    const showDebugHelpers = false;
     const debugArrows = {};
 
     function buildTetrahedron() {
@@ -462,7 +465,10 @@
           color: tetraColors[index],
           roughness: 0.34,
           metalness: 0.08,
-          side: THREE.DoubleSide
+          side: THREE.DoubleSide,
+          polygonOffset: true,
+          polygonOffsetFactor: -1,
+          polygonOffsetUnits: -1
         });
 
         const mesh = makeTriangleMesh(a, b, c, mat);
