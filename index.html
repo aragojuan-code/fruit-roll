@@ -169,6 +169,7 @@
     const OCTA_EDGE = OCTA_R * Math.sqrt(2);
     const TETRA_CIRCUMRADIUS = OCTA_EDGE / Math.sqrt(8 / 3);
     const SURFACE_GAP = 0.008;
+    const FACE_CUT = 0.105; // recorte visual de ~1/10 de la arista
     const SPECIAL_TETRA_FACE = 0;
 
     const octaColors = [0x29374e, 0x314463, 0x263e56, 0x3d315b, 0x203f3a, 0x4c362d, 0x323d55, 0x442f4d];
@@ -242,80 +243,51 @@
       return new THREE.Vector3().addVectors(a, b).add(c).multiplyScalar(1 / 3);
     }
 
+    function getTruncatedFacePoints(a, b, c, cut = FACE_CUT) {
+      const ab1 = a.clone().lerp(b, cut);
+      const ab2 = b.clone().lerp(a, cut);
+      const bc1 = b.clone().lerp(c, cut);
+      const bc2 = c.clone().lerp(b, cut);
+      const ca1 = c.clone().lerp(a, cut);
+      const ca2 = a.clone().lerp(c, cut);
+      return [ab1, ab2, bc1, bc2, ca1, ca2];
+    }
+
     function makeTriangleMesh(a, b, c, material) {
+      // Cara triangular con esquinas recortadas visualmente.
+      // Importante: esto NO cambia los vértices matemáticos usados para rodar;
+      // solo cambia el mesh visible. Así mantenemos la rodadura perfecta anterior.
+      const pts = getTruncatedFacePoints(a, b, c);
+      const center = faceCenter(a, b, c);
+
+      const vertices = [];
+      for (let i = 0; i < pts.length; i++) {
+        const p1 = pts[i];
+        const p2 = pts[(i + 1) % pts.length];
+        vertices.push(
+          center.x, center.y, center.z,
+          p1.x, p1.y, p1.z,
+          p2.x, p2.y, p2.z
+        );
+      }
+
       const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-        a.x, a.y, a.z,
-        b.x, b.y, b.z,
-        c.x, c.y, c.z
-      ]), 3));
-      geom.setIndex([0, 1, 2]);
+      geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
       geom.computeVertexNormals();
       return new THREE.Mesh(geom, material);
+    }
+
+    function makeTruncatedEdgeLine(a, b, c, color = 0xffffff, opacity = 0.22) {
+      const points = getTruncatedFacePoints(a, b, c);
+      const geom = new THREE.BufferGeometry().setFromPoints(points);
+      const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+      return new THREE.LineLoop(geom, mat);
     }
 
     function makeEdgeLine(points, color = 0xffffff, opacity = 0.22) {
       const geom = new THREE.BufferGeometry().setFromPoints(points);
       const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
       return new THREE.LineLoop(geom, mat);
-    }
-
-    function makeFlatCap(points, material) {
-      const center = points.reduce((acc, p) => acc.add(p), new THREE.Vector3()).multiplyScalar(1 / points.length);
-      const positions = [];
-      for (let i = 0; i < points.length; i++) {
-        const p1 = points[i];
-        const p2 = points[(i + 1) % points.length];
-        positions.push(center.x, center.y, center.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
-      }
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      geom.computeVertexNormals();
-      return new THREE.Mesh(geom, material);
-    }
-
-    function sortCapPointsAroundVertex(vertex, points) {
-      const normal = vertex.clone().normalize();
-      let ref = new THREE.Vector3(1, 0, 0);
-      if (Math.abs(ref.dot(normal)) > 0.9) ref = new THREE.Vector3(0, 1, 0);
-      const u = ref.sub(normal.clone().multiplyScalar(ref.dot(normal))).normalize();
-      const v = new THREE.Vector3().crossVectors(normal, u).normalize();
-      return points.sort((a, b) => {
-        const da = a.clone().sub(vertex);
-        const db = b.clone().sub(vertex);
-        const aa = Math.atan2(da.dot(v), da.dot(u));
-        const ab = Math.atan2(db.dot(v), db.dot(u));
-        return aa - ab;
-      });
-    }
-
-    function addTruncationCaps(group, vertices, faceIndexList, cut = 0.13, color = 0x111827) {
-      // Truncado visual plano: crea pequeñas tapas en los vértices.
-      // No modifica las caras ni los vértices reales usados por la física de rodadura.
-      const mat = new THREE.MeshStandardMaterial({
-        color,
-        roughness: 0.5,
-        metalness: 0.04,
-        side: THREE.DoubleSide,
-        transparent: false
-      });
-
-      const adjacency = new Map();
-      vertices.forEach((_, i) => adjacency.set(i, new Set()));
-      for (const face of faceIndexList) {
-        const pairs = [[face[0], face[1]], [face[1], face[2]], [face[2], face[0]]];
-        for (const [i, j] of pairs) {
-          adjacency.get(i).add(j);
-          adjacency.get(j).add(i);
-        }
-      }
-
-      for (const [i, adjSet] of adjacency.entries()) {
-        const vertex = vertices[i];
-        const pts = [...adjSet].map(j => vertex.clone().lerp(vertices[j], cut));
-        const sorted = sortCapPointsAroundVertex(vertex, pts);
-        group.add(makeFlatCap(sorted, mat));
-      }
     }
 
     function attachPlaneToTriangle(plane, a, b, c, normal, orientation = 0, offset = 0.018) {
@@ -373,11 +345,9 @@
         mesh.userData.type = 'octaFace';
         mesh.userData.faceIndex = index;
         boardGroup.add(mesh);
-        boardGroup.add(makeEdgeLine([a, b, c], 0xffffff, 0.18));
+        boardGroup.add(makeTruncatedEdgeLine(a, b, c, 0xffffff, 0.18));
         octaFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, material, neighbors: [] });
       });
-
-      addTruncationCaps(boardGroup, octaVertices, octaFaceVertexIndices, 0.11, 0x17233a);
 
       targetMarker = makeTextPlane('T', { color: '#ffe66d', stroke: 'rgba(0,0,0,0.82)', fontSize: 150, scale: 0.00235 });
       boardGroup.add(targetMarker);
@@ -449,12 +419,10 @@
         });
         const mesh = makeTriangleMesh(a, b, c, mat);
         tetraGroup.add(mesh);
-        const edge = makeEdgeLine([a, b, c], 0x05070b, 0.55);
+        const edge = makeTruncatedEdgeLine(a, b, c, 0x05070b, 0.55);
         tetraGroup.add(edge);
         tetraFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, edge });
       });
-
-      addTruncationCaps(tetraGroup, rawTetraVertices, tetraFaceVertexIndices, 0.11, 0x17233a);
 
       const special = tetraFaces[SPECIAL_TETRA_FACE];
       tetraMarker = makeTextPlane('T', { color: '#ffffff', stroke: 'rgba(0,0,0,0.86)', fontSize: 150, scale: 0.0022 });
