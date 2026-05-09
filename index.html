@@ -584,11 +584,18 @@
       return point.clone().sub(pivot).applyQuaternion(quat).add(pivot);
     }
 
-    function poseError(posA, quatA, posB, quatB) {
-      const posErr = posA.distanceTo(posB);
-      const qDot = Math.abs(THREE.MathUtils.clamp(quatA.dot(quatB), -1, 1));
-      const qErr = 1 - qDot;
-      return posErr + qErr * 2;
+    function getTetraVertexWorld(vertexId) {
+      return rawTetraVertices[vertexId].clone().applyMatrix4(tetraGroup.matrixWorld);
+    }
+
+    function signedAngleAroundAxis(fromVec, toVec, axis) {
+      const a = axis.clone().normalize();
+      const v1 = fromVec.clone().sub(a.clone().multiplyScalar(fromVec.dot(a))).normalize();
+      const v2 = toVec.clone().sub(a.clone().multiplyScalar(toVec.dot(a))).normalize();
+      const cross = new THREE.Vector3().crossVectors(v1, v2);
+      const sin = cross.dot(a);
+      const cos = THREE.MathUtils.clamp(v1.dot(v2), -1, 1);
+      return Math.atan2(sin, cos);
     }
 
     function rollToFace(targetFaceIndex) {
@@ -604,68 +611,54 @@
 
       isAnimating = true;
 
+      // La clave: la bisagra NO es una aproximación sobre la arista del octaedro.
+      // Es la arista real del tetraedro que ahora está apoyada sobre esa arista.
+      // Así no hay salto inicial y no atraviesa el octaedro.
+      tetraGroup.updateMatrixWorld(true);
+      const currentBottom = tetraFaces[currentTetraBottomFaceIndex];
+      const sharedOctaIds = neighbor.edgeVertexIds;
+      const sharedTetraIds = currentBottom.ids.filter(tid => sharedOctaIds.includes(contactMap.get(tid)));
+
+      if (sharedTetraIds.length !== 2) {
+        console.error('No puedo rodar: arista compartida no encontrada en tetra', { sharedOctaIds, contactMap: Object.fromEntries(contactMap) });
+        isAnimating = false;
+        return;
+      }
+
+      const edgeWorldA = getTetraVertexWorld(sharedTetraIds[0]);
+      const edgeWorldB = getTetraVertexWorld(sharedTetraIds[1]);
+      const axis = new THREE.Vector3().subVectors(edgeWorldB, edgeWorldA).normalize();
+      const pivot = edgeWorldA.clone();
+
+      // Calcula el ángulo exacto que lleva la nueva cara inferior del tetraedro
+      // hasta la normal requerida de la cara destino del octaedro.
       const startPos = tetraGroup.position.clone();
       const startQuat = tetraGroup.quaternion.clone();
-      const startFaceIndex = currentOctaFaceIndex;
-      const fromNormal = octaFaces[startFaceIndex].normal.clone();
-      const toNormal = octaFaces[targetFaceIndex].normal.clone();
+      const newBottomNormalNow = getTetraFaceWorldNormal(rollState.newBottomFaceIndex);
+      const requiredBottomNormal = octaFaces[targetFaceIndex].normal.clone().negate();
+      const angle = signedAngleAroundAxis(newBottomNormalNow, requiredBottomNormal, axis);
       const endPose = poseForMapping(targetFaceIndex, rollState.newBottomFaceIndex, rollState.newMap);
 
-      const edgeA = neighbor.edgePoints[0];
-      const edgeB = neighbor.edgePoints[1];
-      const axis = new THREE.Vector3().subVectors(edgeB, edgeA).normalize();
-      // La bisagra real no está en el centro de la arista del octaedro, sino en la arista de contacto
-      // de la cara inferior del tetraedro. Como el tetraedro está separado por SURFACE_GAP,
-      // desplazamos el eje ligeramente hacia fuera para que al rodar no se hunda en el octaedro.
-      const pivot = edgeA.clone().addScaledVector(octaFaces[startFaceIndex].normal, SURFACE_GAP);
-
-      // Ángulo principal entre caras del octaedro. La dirección se escoge contra la pose final.
-      const baseAngle = fromNormal.angleTo(toNormal);
-      const plusQ = new THREE.Quaternion().setFromAxisAngle(axis, baseAngle);
-      const minusQ = new THREE.Quaternion().setFromAxisAngle(axis, -baseAngle);
-      const plusPos = transformByAxis(startPos, plusQ, pivot);
-      const minusPos = transformByAxis(startPos, minusQ, pivot);
-      const plusQuat = plusQ.clone().multiply(startQuat);
-      const minusQuat = minusQ.clone().multiply(startQuat);
-      const sign = poseError(plusPos, plusQuat, endPose.pos, endPose.quat) <= poseError(minusPos, minusQuat, endPose.pos, endPose.quat) ? 1 : -1;
-
-      const duration = 760;
+      const duration = 720;
       const startTime = performance.now();
 
-      console.log('Rodando por arista con corrección suave', {
-        from: `O${startFaceIndex + 1}`,
+      console.log('Rodadura física por arista real del tetraedro', {
+        from: `O${currentOctaFaceIndex + 1}`,
         to: `O${targetFaceIndex + 1}`,
         oldBottom: `T${currentTetraBottomFaceIndex + 1}`,
         newBottom: `T${rollState.newBottomFaceIndex + 1}`,
-        sharedEdge: neighbor.edgeVertexIds,
-        sign
+        sharedOctaEdge: neighbor.edgeVertexIds,
+        sharedTetraEdge: sharedTetraIds,
+        angleDeg: Number(THREE.MathUtils.radToDeg(angle).toFixed(3))
       });
-
-      function correctionWeight(t) {
-        // Mantén casi toda la animación como giro puro por arista.
-        // La corrección hacia el encaje exacto solo entra al final, para evitar que el tetraedro
-        // atraviese visualmente el octaedro a mitad de camino.
-        const x = Math.max(0, Math.min(1, (t - 0.72) / 0.28));
-        return x * x * (3 - 2 * x);
-      }
 
       function animateRoll(now) {
         const rawT = Math.min(1, (now - startTime) / duration);
         const t = easeInOutCubic(rawT);
+        const q = new THREE.Quaternion().setFromAxisAngle(axis, angle * t);
 
-        const hingeQ = new THREE.Quaternion().setFromAxisAngle(axis, sign * baseAngle * t);
-        const hingePos = transformByAxis(startPos, hingeQ, pivot);
-        const hingeQuat = hingeQ.clone().multiply(startQuat);
-
-        // Arco de seguridad: mientras rueda, lo mantenemos un poco más hacia fuera.
-        // Esto evita el efecto visual de que se hunda dentro del octaedro durante la caída.
-        const lift = Math.sin(Math.PI * rawT) * TETRA_CIRCUMRADIUS * 0.34;
-        const liftDir = fromNormal.clone().lerp(toNormal, rawT).normalize();
-        hingePos.addScaledVector(liftDir, lift);
-
-        const w = correctionWeight(rawT);
-        tetraGroup.position.copy(hingePos).lerp(endPose.pos, w);
-        tetraGroup.quaternion.copy(hingeQuat).slerp(endPose.quat, w);
+        tetraGroup.position.copy(transformByAxis(startPos, q, pivot));
+        tetraGroup.quaternion.copy(q.clone().multiply(startQuat));
         tetraGroup.updateMatrixWorld(true);
 
         if (rawT < 1) {
@@ -674,9 +667,13 @@
           currentOctaFaceIndex = targetFaceIndex;
           currentTetraBottomFaceIndex = rollState.newBottomFaceIndex;
           contactMap = rollState.newMap;
+
+          // Snap final mínimo para corregir error numérico. Si la geometría está bien,
+          // este ajuste es imperceptible porque la rodadura ya llega prácticamente ahí.
           tetraGroup.position.copy(endPose.pos);
           tetraGroup.quaternion.copy(endPose.quat);
           tetraGroup.updateMatrixWorld(true);
+
           updateTetraFaceVisibility();
           validateContact(currentOctaFaceIndex, currentTetraBottomFaceIndex);
           moves += 1;
