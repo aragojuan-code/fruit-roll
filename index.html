@@ -229,7 +229,7 @@
     const pointer = new THREE.Vector2();
 
     const OCTA_R = 2.15;
-    const TETRA_R = 0.62;
+    const TETRA_R = OCTA_R * Math.sqrt(3) / 2; // Igualar arista tetra = arista de cada cara del octaedro
     const SURFACE_GAP = 0.045;
 
     const octaColors = [
@@ -494,7 +494,7 @@
 
     function alignTetraToOctaFace(faceIndex, preserveSpin = false) {
       const face = octaFaces[faceIndex];
-      const targetBottomNormal = face.normal.clone().multiplyScalar(-1);
+      const targetBottomNormal = face.normal.clone();
       const localBottomNormal = tetraFaces[downLocalTetraFaceIndex].normal.clone();
 
       const q = new THREE.Quaternion().setFromUnitVectors(localBottomNormal, targetBottomNormal);
