@@ -140,7 +140,7 @@
     scene.fog = new THREE.Fog(0x070a10, 8, 18);
 
     const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 100);
-    camera.position.set(3.6, 2.6, 4.2);
+    camera.position.set(2.7, 1.95, 3.15);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -152,8 +152,8 @@
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.target.set(0, 0, 0);
-    controls.minDistance = 2.5;
-    controls.maxDistance = 7.5;
+    controls.minDistance = 1.85;
+    controls.maxDistance = 5.8;
     controls.enablePan = false;
 
     scene.add(new THREE.HemisphereLight(0x99bbff, 0x111018, 1.8));
@@ -173,7 +173,7 @@
     const pointer = new THREE.Vector2();
 
     // Media escala respecto a la versión anterior.
-    const OCTA_R = 1.075;
+    const OCTA_R = 0.74;
     const OCTA_EDGE = OCTA_R * Math.sqrt(2);
     const TETRA_CIRCUMRADIUS = OCTA_EDGE / Math.sqrt(8 / 3); // tetra edge == octa face edge
     const SURFACE_GAP = 0.008;
@@ -209,28 +209,46 @@
       opacity: 0.95
     });
 
-    function makeTextSprite(text, options = {}) {
-      const { fontSize = 72, color = '#ffffff', padding = 22, scale = 0.28 } = options;
+    function makeTextPlane(text, options = {}) {
+      const { fontSize = 120, color = '#ffffff', padding = 18, scale = 0.0046 } = options;
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
-      ctx.font = `800 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
+      ctx.font = `900 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
       const metrics = ctx.measureText(text);
       canvas.width = Math.ceil(metrics.width + padding * 2);
       canvas.height = Math.ceil(fontSize + padding * 2);
-      ctx.font = `800 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
+
+      ctx.font = `900 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.lineWidth = 8;
-      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-      ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 1);
+      ctx.lineWidth = Math.max(10, fontSize * 0.12);
+      ctx.strokeStyle = 'rgba(0,0,0,0.72)';
+      ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 2);
       ctx.fillStyle = color;
-      ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
+      ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 2);
+
       const texture = new THREE.CanvasTexture(canvas);
       texture.colorSpace = THREE.SRGBColorSpace;
-      const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
-      const sprite = new THREE.Sprite(material);
-      sprite.scale.set((canvas.width / canvas.height) * scale, scale, 1);
-      return sprite;
+      texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        side: THREE.DoubleSide
+      });
+      const geometry = new THREE.PlaneGeometry(canvas.width * scale, canvas.height * scale);
+      return new THREE.Mesh(geometry, material);
+    }
+
+    function attachLabelToTriangle(label, a, b, c, normal, offset = 0.02) {
+      const center = faceCenter(a, b, c);
+      const xAxis = new THREE.Vector3().subVectors(b, a).normalize();
+      const yAxis = new THREE.Vector3().crossVectors(normal, xAxis).normalize();
+      const basis = new THREE.Matrix4().makeBasis(xAxis, yAxis, normal);
+      label.quaternion.setFromRotationMatrix(basis);
+      label.position.copy(center).addScaledVector(normal, offset);
     }
 
     function faceNormal(a, b, c) {
@@ -303,8 +321,8 @@
         boardGroup.add(mesh);
         boardGroup.add(makeEdgeLine([a, b, c], 0xffffff, 0.18));
 
-        const label = makeTextSprite(`O${index + 1}`, { color: '#eef5ff', fontSize: 66, scale: 0.20 });
-        label.position.copy(center).addScaledVector(normal, 0.022);
+        const label = makeTextPlane(`O${index + 1}`, { color: '#eef5ff', fontSize: 132, scale: 0.0034 });
+        attachLabelToTriangle(label, a, b, c, normal, 0.018);
         boardGroup.add(label);
 
         octaFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, material, label, neighbors: [] });
@@ -379,12 +397,12 @@
         tetraGroup.add(mesh);
         tetraGroup.add(makeEdgeLine([a, b, c], 0x05070b, 0.55));
 
-        const label = makeTextSprite(`T${index + 1}`, {
+        const label = makeTextPlane(`T${index + 1}`, {
           color: index === 1 ? '#1a1200' : '#06100e',
-          fontSize: 62,
-          scale: 0.16
+          fontSize: 132,
+          scale: 0.0030
         });
-        label.position.copy(center).addScaledVector(normal, 0.020);
+        attachLabelToTriangle(label, a, b, c, normal, 0.018);
         tetraGroup.add(label);
 
         tetraFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, label });
@@ -589,27 +607,29 @@
       const startPos = tetraGroup.position.clone();
       const startQuat = tetraGroup.quaternion.clone();
       const startFaceIndex = currentOctaFaceIndex;
+      const fromNormal = octaFaces[startFaceIndex].normal.clone();
+      const toNormal = octaFaces[targetFaceIndex].normal.clone();
       const endPose = poseForMapping(targetFaceIndex, rollState.newBottomFaceIndex, rollState.newMap);
 
       const edgeA = neighbor.edgePoints[0];
       const edgeB = neighbor.edgePoints[1];
       const axis = new THREE.Vector3().subVectors(edgeB, edgeA).normalize();
-      const pivot = edgeA.clone();
-      const angle = octaFaces[startFaceIndex].normal.angleTo(octaFaces[targetFaceIndex].normal);
+      const pivot = edgeA.clone().add(edgeB).multiplyScalar(0.5);
 
-      // Elige automáticamente el signo de giro que deja más cerca del encaje final exacto.
-      const plusQ = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-      const minusQ = new THREE.Quaternion().setFromAxisAngle(axis, -angle);
+      // Ángulo principal entre caras del octaedro. La dirección se escoge contra la pose final.
+      const baseAngle = fromNormal.angleTo(toNormal);
+      const plusQ = new THREE.Quaternion().setFromAxisAngle(axis, baseAngle);
+      const minusQ = new THREE.Quaternion().setFromAxisAngle(axis, -baseAngle);
       const plusPos = transformByAxis(startPos, plusQ, pivot);
       const minusPos = transformByAxis(startPos, minusQ, pivot);
       const plusQuat = plusQ.clone().multiply(startQuat);
       const minusQuat = minusQ.clone().multiply(startQuat);
       const sign = poseError(plusPos, plusQuat, endPose.pos, endPose.quat) <= poseError(minusPos, minusQuat, endPose.pos, endPose.quat) ? 1 : -1;
 
-      const duration = 560;
+      const duration = 760;
       const startTime = performance.now();
 
-      console.log('Rodando por arista', {
+      console.log('Rodando por arista con corrección suave', {
         from: `O${startFaceIndex + 1}`,
         to: `O${targetFaceIndex + 1}`,
         oldBottom: `T${currentTetraBottomFaceIndex + 1}`,
@@ -618,12 +638,29 @@
         sign
       });
 
+      function correctionWeight(t) {
+        // 0 al principio: se ve la rodadura alrededor de arista.
+        // 1 al final: termina exactamente encajado, sin salto brusco.
+        const x = Math.max(0, Math.min(1, (t - 0.18) / 0.82));
+        return x * x * (3 - 2 * x);
+      }
+
       function animateRoll(now) {
         const rawT = Math.min(1, (now - startTime) / duration);
         const t = easeInOutCubic(rawT);
-        const q = new THREE.Quaternion().setFromAxisAngle(axis, sign * angle * t);
-        tetraGroup.position.copy(transformByAxis(startPos, q, pivot));
-        tetraGroup.quaternion.copy(q.clone().multiply(startQuat));
+
+        const hingeQ = new THREE.Quaternion().setFromAxisAngle(axis, sign * baseAngle * t);
+        const hingePos = transformByAxis(startPos, hingeQ, pivot);
+        const hingeQuat = hingeQ.clone().multiply(startQuat);
+
+        // Pequeño arco visual para que se perciba la caída, sin alterar el encaje final.
+        const lift = Math.sin(Math.PI * rawT) * TETRA_CIRCUMRADIUS * 0.12;
+        const liftDir = fromNormal.clone().lerp(toNormal, rawT).normalize();
+        hingePos.addScaledVector(liftDir, lift);
+
+        const w = correctionWeight(rawT);
+        tetraGroup.position.copy(hingePos).lerp(endPose.pos, w);
+        tetraGroup.quaternion.copy(hingeQuat).slerp(endPose.quat, w);
         tetraGroup.updateMatrixWorld(true);
 
         if (rawT < 1) {
@@ -632,7 +669,11 @@
           currentOctaFaceIndex = targetFaceIndex;
           currentTetraBottomFaceIndex = rollState.newBottomFaceIndex;
           contactMap = rollState.newMap;
-          applyTetraPose(currentOctaFaceIndex, currentTetraBottomFaceIndex, contactMap);
+          tetraGroup.position.copy(endPose.pos);
+          tetraGroup.quaternion.copy(endPose.quat);
+          tetraGroup.updateMatrixWorld(true);
+          updateTetraFaceVisibility();
+          validateContact(currentOctaFaceIndex, currentTetraBottomFaceIndex);
           moves += 1;
           updateFaceMaterials();
           updateHUD();
