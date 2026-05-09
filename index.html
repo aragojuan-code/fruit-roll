@@ -12,10 +12,6 @@
       --text: #eef5ff;
       --muted: #9aa8bb;
       --green: #49f0b4;
-      --green-soft: rgba(73,240,180,0.28);
-      --blue: #75a7ff;
-      --warn: #ffd166;
-      --bad: #ff5d7a;
     }
 
     * { box-sizing: border-box; }
@@ -31,23 +27,15 @@
       touch-action: none;
     }
 
-    #app {
-      position: fixed;
-      inset: 0;
-    }
-
-    canvas {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
+    #app { position: fixed; inset: 0; }
+    canvas { display: block; width: 100%; height: 100%; }
 
     .hud {
       position: fixed;
       top: max(14px, env(safe-area-inset-top));
       left: 50%;
       transform: translateX(-50%);
-      width: min(720px, calc(100vw - 28px));
+      width: min(760px, calc(100vw - 28px));
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -61,45 +49,11 @@
       z-index: 5;
     }
 
-    .title {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      min-width: 0;
-    }
-
-    .title strong {
-      font-size: 15px;
-      letter-spacing: 0.02em;
-      white-space: nowrap;
-    }
-
-    .title span {
-      font-size: 12px;
-      color: var(--muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .stats {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-
-    .pill {
-      padding: 7px 9px;
-      background: rgba(255,255,255,0.06);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 999px;
-      font-size: 12px;
-      color: var(--muted);
-      white-space: nowrap;
-    }
-
+    .title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .title strong { font-size: 15px; letter-spacing: 0.02em; white-space: nowrap; }
+    .title span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stats { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .pill { padding: 7px 9px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 999px; font-size: 12px; color: var(--muted); white-space: nowrap; }
     .pill b { color: var(--text); }
 
     button {
@@ -113,7 +67,6 @@
       cursor: pointer;
       box-shadow: 0 8px 22px rgba(73,240,180,0.18);
     }
-
     button:active { transform: translateY(1px); }
 
     .hint {
@@ -121,7 +74,7 @@
       bottom: max(14px, env(safe-area-inset-bottom));
       left: 50%;
       transform: translateX(-50%);
-      width: min(620px, calc(100vw - 28px));
+      width: min(680px, calc(100vw - 28px));
       padding: 10px 12px;
       text-align: center;
       color: var(--muted);
@@ -136,16 +89,9 @@
     }
 
     @media (max-width: 620px) {
-      .hud {
-        align-items: flex-start;
-      }
-      .stats {
-        gap: 6px;
-      }
-      .pill {
-        padding: 6px 8px;
-        font-size: 11px;
-      }
+      .hud { align-items: flex-start; }
+      .stats { gap: 6px; }
+      .pill { padding: 6px 8px; font-size: 11px; }
       .title strong { font-size: 14px; }
       .title span { display: none; }
     }
@@ -162,13 +108,14 @@
     <div class="stats">
       <div class="pill">Octa: <b id="octaFace">O1</b></div>
       <div class="pill">Tetra abajo: <b id="tetraFace">T1</b></div>
+      <div class="pill">Spin: <b id="spinFace">0</b></div>
       <div class="pill">Movs: <b id="moves">0</b></div>
       <button id="resetBtn">Reset</button>
     </div>
   </div>
 
   <div class="hint">
-    Gira la cámara con un dedo/ratón. Zoom con rueda o pellizco. Las caras verdes suaves son movimientos válidos.
+    El tetraedro está apoyado por fuera: la cara inferior se oculta. Pulsa solo caras verdes vecinas. Rueda visual por ahora; el estado final encaja triángulo contra triángulo.
   </div>
 
   <script type="importmap">
@@ -187,6 +134,7 @@
     const app = document.getElementById('app');
     const octaFaceEl = document.getElementById('octaFace');
     const tetraFaceEl = document.getElementById('tetraFace');
+    const spinFaceEl = document.getElementById('spinFace');
     const movesEl = document.getElementById('moves');
     const resetBtn = document.getElementById('resetBtn');
 
@@ -214,29 +162,24 @@
     const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
     keyLight.position.set(4, 5, 4);
     scene.add(keyLight);
-
     const rimLight = new THREE.PointLight(0x49f0b4, 5, 10);
     rimLight.position.set(-3, 2, 3);
     scene.add(rimLight);
 
     const boardGroup = new THREE.Group();
-    scene.add(boardGroup);
-
     const tetraGroup = new THREE.Group();
+    scene.add(boardGroup);
     scene.add(tetraGroup);
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
     const OCTA_R = 2.15;
-    const TETRA_R = OCTA_R * Math.sqrt(3) / 2; // Igualar arista tetra = arista de cada cara del octaedro
-    const SURFACE_GAP = 0.045;
+    const OCTA_EDGE = OCTA_R * Math.sqrt(2);
+    const TETRA_CIRCUMRADIUS = OCTA_EDGE / Math.sqrt(8 / 3); // tetra edge == octa face edge
+    const SURFACE_GAP = 0.012;
 
-    const octaColors = [
-      0x29374e, 0x314463, 0x263e56, 0x3d315b,
-      0x203f3a, 0x4c362d, 0x323d55, 0x442f4d
-    ];
-
+    const octaColors = [0x29374e, 0x314463, 0x263e56, 0x3d315b, 0x203f3a, 0x4c362d, 0x323d55, 0x442f4d];
     const tetraColors = [0xff5478, 0xffd166, 0x49f0b4, 0x75a7ff];
 
     const baseOctaMaterial = {
@@ -244,8 +187,7 @@
       metalness: 0.06,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.96,
-      depthWrite: false
+      opacity: 0.96
     };
 
     const currentMaterial = new THREE.MeshStandardMaterial({
@@ -255,8 +197,7 @@
       metalness: 0.08,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.98,
-      depthWrite: false
+      opacity: 0.98
     });
 
     const neighborMaterial = new THREE.MeshStandardMaterial({
@@ -266,41 +207,27 @@
       metalness: 0.06,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.95,
-      depthWrite: false
+      opacity: 0.95
     });
 
     function makeTextSprite(text, options = {}) {
-      const {
-        fontSize = 72,
-        color = '#ffffff',
-        bg = 'rgba(0,0,0,0)',
-        padding = 22,
-        scale = 0.28
-      } = options;
-
+      const { fontSize = 72, color = '#ffffff', padding = 22, scale = 0.28 } = options;
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       ctx.font = `800 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
       const metrics = ctx.measureText(text);
       canvas.width = Math.ceil(metrics.width + padding * 2);
       canvas.height = Math.ceil(fontSize + padding * 2);
-
       ctx.font = `800 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.lineWidth = 8;
-      ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
       ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 1);
       ctx.fillStyle = color;
       ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
-
       const texture = new THREE.CanvasTexture(canvas);
       texture.colorSpace = THREE.SRGBColorSpace;
-      texture.needsUpdate = true;
-
       const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
       const sprite = new THREE.Sprite(material);
       sprite.scale.set((canvas.width / canvas.height) * scale, scale, 1);
@@ -308,10 +235,7 @@
     }
 
     function faceNormal(a, b, c) {
-      return new THREE.Vector3()
-        .subVectors(b, a)
-        .cross(new THREE.Vector3().subVectors(c, a))
-        .normalize();
+      return new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).normalize();
     }
 
     function faceCenter(a, b, c) {
@@ -320,12 +244,11 @@
 
     function makeTriangleMesh(a, b, c, material) {
       const geom = new THREE.BufferGeometry();
-      const vertices = new Float32Array([
+      geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
         a.x, a.y, a.z,
         b.x, b.y, b.z,
         c.x, c.y, c.z
-      ]);
-      geom.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+      ]), 3));
       geom.setIndex([0, 1, 2]);
       geom.computeVertexNormals();
       return new THREE.Mesh(geom, material);
@@ -338,15 +261,14 @@
     }
 
     const octaVertices = [
-      new THREE.Vector3( OCTA_R, 0, 0), // 0 +X
-      new THREE.Vector3(-OCTA_R, 0, 0), // 1 -X
-      new THREE.Vector3(0,  OCTA_R, 0), // 2 +Y
-      new THREE.Vector3(0, -OCTA_R, 0), // 3 -Y
-      new THREE.Vector3(0, 0,  OCTA_R), // 4 +Z
-      new THREE.Vector3(0, 0, -OCTA_R)  // 5 -Z
+      new THREE.Vector3( OCTA_R, 0, 0),
+      new THREE.Vector3(-OCTA_R, 0, 0),
+      new THREE.Vector3(0,  OCTA_R, 0),
+      new THREE.Vector3(0, -OCTA_R, 0),
+      new THREE.Vector3(0, 0,  OCTA_R),
+      new THREE.Vector3(0, 0, -OCTA_R)
     ];
 
-    // 8 triangular faces. Vertex order is adjusted so normals point outward.
     const octaFaceVertexIndices = [
       [0, 2, 4], [4, 2, 1], [1, 2, 5], [5, 2, 0],
       [4, 3, 0], [1, 3, 4], [5, 3, 1], [0, 3, 5]
@@ -358,49 +280,35 @@
       boardGroup.clear();
       octaFaces.length = 0;
 
-      octaFaceVertexIndices.forEach((ids, index) => {
-        const a = octaVertices[ids[0]].clone();
-        const b = octaVertices[ids[1]].clone();
-        const c = octaVertices[ids[2]].clone();
+      octaFaceVertexIndices.forEach((rawIds, index) => {
+        const ids = [...rawIds];
+        let a = octaVertices[ids[0]].clone();
+        let b = octaVertices[ids[1]].clone();
+        let c = octaVertices[ids[2]].clone();
         let normal = faceNormal(a, b, c);
-        const center = faceCenter(a, b, c);
+        let center = faceCenter(a, b, c);
 
         if (normal.dot(center) < 0) {
           [ids[1], ids[2]] = [ids[2], ids[1]];
-          b.copy(octaVertices[ids[1]]);
-          c.copy(octaVertices[ids[2]]);
+          a = octaVertices[ids[0]].clone();
+          b = octaVertices[ids[1]].clone();
+          c = octaVertices[ids[2]].clone();
           normal = faceNormal(a, b, c);
+          center = faceCenter(a, b, c);
         }
 
-        const material = new THREE.MeshStandardMaterial({
-          ...baseOctaMaterial,
-          color: octaColors[index]
-        });
-
+        const material = new THREE.MeshStandardMaterial({ ...baseOctaMaterial, color: octaColors[index] });
         const mesh = makeTriangleMesh(a, b, c, material);
         mesh.userData.type = 'octaFace';
         mesh.userData.faceIndex = index;
         boardGroup.add(mesh);
-
-        const edge = makeEdgeLine([a, b, c], 0xffffff, 0.18);
-        boardGroup.add(edge);
+        boardGroup.add(makeEdgeLine([a, b, c], 0xffffff, 0.18));
 
         const label = makeTextSprite(`O${index + 1}`, { color: '#eef5ff', fontSize: 74, scale: 0.33 });
         label.position.copy(center).addScaledVector(normal, 0.035);
-        label.userData.normal = normal.clone();
         boardGroup.add(label);
 
-        octaFaces.push({
-          index,
-          ids: [...ids],
-          vertices: [a, b, c],
-          center,
-          normal,
-          mesh,
-          material,
-          label,
-          neighbors: []
-        });
+        octaFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, material, label, neighbors: [] });
       });
     }
 
@@ -425,13 +333,12 @@
     buildOctahedronBoard();
     computeNeighbors();
 
-    // Tetrahedron geometry defined manually so each face can be an independent mesh and label.
     const rawTetraVertices = [
       new THREE.Vector3( 1,  1,  1),
       new THREE.Vector3(-1, -1,  1),
       new THREE.Vector3(-1,  1, -1),
       new THREE.Vector3( 1, -1, -1)
-    ].map(v => v.normalize().multiplyScalar(TETRA_R));
+    ].map(v => v.normalize().multiplyScalar(TETRA_CIRCUMRADIUS));
 
     const tetraFaceVertexIndices = [
       [0, 2, 1],
@@ -441,51 +348,47 @@
     ];
 
     const tetraFaces = [];
-    const showDebugHelpers = false;
-    const debugArrows = {};
 
     function buildTetrahedron() {
       tetraGroup.clear();
       tetraFaces.length = 0;
 
-      tetraFaceVertexIndices.forEach((ids, index) => {
-        const a = rawTetraVertices[ids[0]].clone();
-        const b = rawTetraVertices[ids[1]].clone();
-        const c = rawTetraVertices[ids[2]].clone();
+      tetraFaceVertexIndices.forEach((rawIds, index) => {
+        const ids = [...rawIds];
+        let a = rawTetraVertices[ids[0]].clone();
+        let b = rawTetraVertices[ids[1]].clone();
+        let c = rawTetraVertices[ids[2]].clone();
         let normal = faceNormal(a, b, c);
-        const center = faceCenter(a, b, c);
+        let center = faceCenter(a, b, c);
+
         if (normal.dot(center) < 0) {
           [ids[1], ids[2]] = [ids[2], ids[1]];
-          b.copy(rawTetraVertices[ids[1]]);
-          c.copy(rawTetraVertices[ids[2]]);
+          a = rawTetraVertices[ids[0]].clone();
+          b = rawTetraVertices[ids[1]].clone();
+          c = rawTetraVertices[ids[2]].clone();
           normal = faceNormal(a, b, c);
+          center = faceCenter(a, b, c);
         }
 
         const mat = new THREE.MeshStandardMaterial({
           color: tetraColors[index],
           roughness: 0.34,
           metalness: 0.08,
-          side: THREE.DoubleSide,
-          polygonOffset: true,
-          polygonOffsetFactor: -1,
-          polygonOffsetUnits: -1
+          side: THREE.FrontSide // CLAVE: la cara apoyada no debe verse como una losa encima del octaedro.
         });
-
         const mesh = makeTriangleMesh(a, b, c, mat);
         tetraGroup.add(mesh);
-
-        const edge = makeEdgeLine([a, b, c], 0x05070b, 0.42);
-        tetraGroup.add(edge);
+        tetraGroup.add(makeEdgeLine([a, b, c], 0x05070b, 0.55));
 
         const label = makeTextSprite(`T${index + 1}`, {
           color: index === 1 ? '#1a1200' : '#06100e',
           fontSize: 68,
           scale: 0.22
         });
-        label.position.copy(center).addScaledVector(normal, 0.022);
+        label.position.copy(center).addScaledVector(normal, 0.026);
         tetraGroup.add(label);
 
-        tetraFaces.push({ index, ids: [...ids], center, normal, mesh, label });
+        tetraFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, label });
       });
     }
 
@@ -493,10 +396,59 @@
 
     let currentOctaFaceIndex = 0;
     let currentTetraBottomFaceIndex = 0;
-    let tetraOrientation = 'provisional';
     let currentSpin = 0;
     let moves = 0;
     let isAnimating = false;
+
+    function basisFromTriangle(a, b, c, desiredNormal = null) {
+      let p0 = a.clone();
+      let p1 = b.clone();
+      let p2 = c.clone();
+      let normal = faceNormal(p0, p1, p2);
+      if (desiredNormal && normal.dot(desiredNormal) < 0) {
+        const tmp = p1; p1 = p2; p2 = tmp;
+        normal = faceNormal(p0, p1, p2);
+      }
+      const x = new THREE.Vector3().subVectors(p1, p0).normalize();
+      const y = new THREE.Vector3().crossVectors(normal, x).normalize();
+      const center = faceCenter(p0, p1, p2);
+      const matrix = new THREE.Matrix4().makeBasis(x, y, normal);
+      return { p0, p1, p2, center, normal, matrix };
+    }
+
+    function poseFor(octaFaceIndex, tetraBottomFaceIndex, spin = 0) {
+      const octaFace = octaFaces[octaFaceIndex];
+      const tetraFace = tetraFaces[tetraBottomFaceIndex];
+
+      const sourceVerts = tetraFace.ids.map(id => rawTetraVertices[id].clone());
+      const source = basisFromTriangle(sourceVerts[0], sourceVerts[1], sourceVerts[2], tetraFace.normal);
+
+      // Three valid orientation spins: rotate the target triangle mapping by 0/1/2 vertices.
+      const targetIdsBase = [...octaFace.ids];
+      const spinSteps = ((spin % 3) + 3) % 3;
+      const targetIds = targetIdsBase.slice(spinSteps).concat(targetIdsBase.slice(0, spinSteps));
+      const targetVerts = targetIds.map(id => octaVertices[id].clone().addScaledVector(octaFace.normal, SURFACE_GAP));
+
+      // Bottom face exterior normal must point into the octahedron surface, i.e. -octaNormal.
+      const target = basisFromTriangle(targetVerts[0], targetVerts[1], targetVerts[2], octaFace.normal.clone().negate());
+
+      const invSourceRot = source.matrix.clone().invert();
+      const rotMatrix = target.matrix.clone().multiply(invSourceRot);
+      const quat = new THREE.Quaternion().setFromRotationMatrix(rotMatrix);
+      const sourceCenterRotated = source.center.clone().applyQuaternion(quat);
+      const pos = target.center.clone().sub(sourceCenterRotated);
+
+      return { pos, quat };
+    }
+
+    function applyTetraPose(octaFaceIndex, tetraBottomFaceIndex, spin = 0) {
+      const pose = poseFor(octaFaceIndex, tetraBottomFaceIndex, spin);
+      tetraGroup.position.copy(pose.pos);
+      tetraGroup.quaternion.copy(pose.quat);
+      tetraGroup.updateMatrixWorld(true);
+      updateTetraFaceVisibility();
+      validateContact(octaFaceIndex, tetraBottomFaceIndex);
+    }
 
     function getTetraFaceWorldNormal(faceIndex) {
       return tetraFaces[faceIndex].normal.clone().transformDirection(tetraGroup.matrixWorld).normalize();
@@ -506,99 +458,30 @@
       return tetraFaces[faceIndex].center.clone().applyMatrix4(tetraGroup.matrixWorld);
     }
 
-    function initDebugHelpers() {
-      if (!showDebugHelpers) return;
-      debugArrows.octa = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), 0.8, 0x49f0b4, 0.14, 0.09);
-      debugArrows.tetra = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), 0.7, 0xff5478, 0.12, 0.08);
-      scene.add(debugArrows.octa);
-      scene.add(debugArrows.tetra);
-    }
-
-    function makeFaceFrame(faceVertices, outwardReference) {
-      const p0 = faceVertices[0].clone();
-      let p1 = faceVertices[1].clone();
-      let p2 = faceVertices[2].clone();
-
-      let normal = new THREE.Vector3().subVectors(p1, p0).cross(new THREE.Vector3().subVectors(p2, p0)).normalize();
-      const center = p0.clone().add(p1).add(p2).multiplyScalar(1 / 3);
-      if (normal.dot(outwardReference.clone().sub(center)) < 0) {
-        [p1, p2] = [p2, p1];
-        normal = new THREE.Vector3().subVectors(p1, p0).cross(new THREE.Vector3().subVectors(p2, p0)).normalize();
-      }
-
-      const xAxis = p1.clone().sub(p0).normalize();
-      const yAxis = new THREE.Vector3().crossVectors(normal, xAxis).normalize();
-      return { center, normal, xAxis, yAxis, vertices: [p0, p1, p2] };
+    function updateTetraFaceVisibility() {
+      tetraFaces.forEach((face, i) => {
+        const isBottom = i === currentTetraBottomFaceIndex;
+        face.mesh.visible = !isBottom;
+        face.label.visible = !isBottom;
+      });
     }
 
     function validateContact(octaFaceIndex, tetraBottomFaceIndex) {
-      const octaFace = octaFaces[octaFaceIndex];
-      const octaVerts = octaFace.ids.map(id => octaVertices[id].clone().addScaledVector(octaFace.normal, SURFACE_GAP));
-      const tetraVerts = tetraFaces[tetraBottomFaceIndex].ids.map(id => rawTetraVertices[id].clone().applyQuaternion(tetraGroup.quaternion).add(tetraGroup.position));
-
-      const distRows = tetraVerts.map((tv, i) => {
-        const dists = octaVerts.map(ov => tv.distanceTo(ov));
-        return { tetraVertex: i, minDist: Math.min(...dists) };
-      });
-
+      const octaNormal = octaFaces[octaFaceIndex].normal.clone();
       const tetraBottomNormal = getTetraFaceWorldNormal(tetraBottomFaceIndex);
-      const dot = tetraBottomNormal.dot(octaFace.normal.clone().negate());
-      console.log('validateContact', {
-        octaFace: `O${octaFaceIndex + 1}`,
-        tetraBottomFace: `T${tetraBottomFaceIndex + 1}`,
+      const dot = tetraBottomNormal.dot(octaNormal.clone().negate());
+      console.log('Contacto', {
+        octa: `O${octaFaceIndex + 1}`,
+        tetraBottom: `T${tetraBottomFaceIndex + 1}`,
+        spin: currentSpin,
         dot: Number(dot.toFixed(6)),
-        minVertexDistances: distRows.map(r => Number(r.minDist.toFixed(6)))
+        expected: 'dot cercano a 1; tetra por fuera; cara apoyada oculta'
       });
-    }
-
-    function placeTetraOnOctaFace(octaFaceIndex, tetraBottomFaceIndex, spin = 0) {
-      const octaFace = octaFaces[octaFaceIndex];
-      const tetraFace = tetraFaces[tetraBottomFaceIndex];
-
-      const tetraLocalVerts = tetraFace.ids.map(id => rawTetraVertices[id].clone());
-      const tetraFrame = makeFaceFrame(tetraLocalVerts, tetraFace.center.clone().multiplyScalar(3));
-
-      const octaLocalVerts = octaFace.ids.map(id => octaVertices[id].clone());
-      const octaFrame = makeFaceFrame(octaLocalVerts, octaFace.normal.clone().multiplyScalar(3));
-
-      const spinIndex = ((spin % 3) + 3) % 3;
-      const spinAngle = spinIndex * (Math.PI * 2 / 3);
-      const spinQuat = new THREE.Quaternion().setFromAxisAngle(octaFrame.normal, spinAngle);
-
-      const targetX = octaFrame.xAxis.clone().applyQuaternion(spinQuat).normalize();
-      const targetNormal = octaFrame.normal.clone();
-      const targetY = new THREE.Vector3().crossVectors(targetNormal, targetX).normalize();
-
-      const sourceBasis = new THREE.Matrix4().makeBasis(tetraFrame.xAxis, tetraFrame.yAxis, tetraFrame.normal);
-      const targetBasis = new THREE.Matrix4().makeBasis(targetX, targetY, targetNormal);
-      const sourceQ = new THREE.Quaternion().setFromRotationMatrix(sourceBasis);
-      const targetQ = new THREE.Quaternion().setFromRotationMatrix(targetBasis);
-      tetraGroup.quaternion.copy(targetQ.multiply(sourceQ.invert()));
-
-      const bottomCenterWorld = tetraFrame.center.clone().applyQuaternion(tetraGroup.quaternion);
-      const targetBottomCenter = octaFrame.center.clone().addScaledVector(octaFrame.normal, SURFACE_GAP);
-      tetraGroup.position.copy(targetBottomCenter.sub(bottomCenterWorld));
-      tetraGroup.updateMatrixWorld(true);
-
-      validateContact(octaFaceIndex, tetraBottomFaceIndex);
-    }
-
-    function updateTetraLabelsFacing() {
-      // Sprites face the camera automatically, so no action required.
-    }
-
-    function updateOctaLabelsFacing() {
-      // Sprites face the camera automatically, while staying attached to face centers.
     }
 
     function updateFaceMaterials() {
-      octaFaces.forEach(face => {
-        face.mesh.material = face.material;
-        face.mesh.scale.setScalar(1);
-      });
-
+      octaFaces.forEach(face => { face.mesh.material = face.material; });
       octaFaces[currentOctaFaceIndex].mesh.material = currentMaterial;
-
       for (const n of octaFaces[currentOctaFaceIndex].neighbors) {
         octaFaces[n.faceIndex].mesh.material = neighborMaterial;
       }
@@ -607,6 +490,7 @@
     function updateHUD() {
       octaFaceEl.textContent = `O${currentOctaFaceIndex + 1}`;
       tetraFaceEl.textContent = `T${currentTetraBottomFaceIndex + 1}`;
+      spinFaceEl.textContent = String(currentSpin);
       movesEl.textContent = String(moves);
     }
 
@@ -622,138 +506,101 @@
       return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
 
+    function chooseNextBottomFace(currentBottomFaceIndex, sharedOctaVertexIds) {
+      // Provisional but coherent: the next bottom face must be one of the 3 faces adjacent to the current bottom face.
+      // A later version should track exact vertex-to-vertex correspondence for physically exact rolling.
+      const currentIds = tetraFaces[currentBottomFaceIndex].ids;
+      const adjacent = tetraFaces.filter(f => f.index !== currentBottomFaceIndex && f.ids.filter(id => currentIds.includes(id)).length === 2);
+      const pick = adjacent[moves % adjacent.length];
+      return pick.index;
+    }
+
     function rollToFace(targetFaceIndex) {
       if (isAnimating) return;
-
       const neighbor = getNeighborData(targetFaceIndex);
       if (!neighbor) {
-        console.log('Movimiento inválido:', {
-          current: `O${currentOctaFaceIndex + 1}`,
-          target: `O${targetFaceIndex + 1}`
-        });
+        console.log('Movimiento inválido', { current: `O${currentOctaFaceIndex + 1}`, target: `O${targetFaceIndex + 1}` });
         return;
       }
 
       isAnimating = true;
 
-      const fromFace = octaFaces[currentOctaFaceIndex];
-      const toFace = octaFaces[targetFaceIndex];
-      const edgeA = neighbor.edgePoints[0];
-      const edgeB = neighbor.edgePoints[1];
-      const edgeDir = new THREE.Vector3().subVectors(edgeB, edgeA).normalize();
-
       const startPos = tetraGroup.position.clone();
       const startQuat = tetraGroup.quaternion.clone();
-      const rollAngle = fromFace.normal.angleTo(toFace.normal);
-      const axisCandidate = edgeDir.clone();
-      const rotatedNormal = fromFace.normal.clone().applyAxisAngle(axisCandidate, rollAngle);
-      const axis = (rotatedNormal.distanceTo(toFace.normal) <= fromFace.normal.clone().applyAxisAngle(axisCandidate.clone().negate(), rollAngle).distanceTo(toFace.normal))
-        ? axisCandidate
-        : axisCandidate.negate();
-      const edgePivot = edgeA.clone().add(edgeB).multiplyScalar(0.5);
+      const startFace = currentOctaFaceIndex;
+      const nextBottom = chooseNextBottomFace(currentTetraBottomFaceIndex, neighbor.edgeVertexIds);
+      const nextSpin = (currentSpin + 1) % 3;
+      const endPose = poseFor(targetFaceIndex, nextBottom, nextSpin);
+      const fromNormal = octaFaces[startFace].normal.clone();
+      const toNormal = octaFaces[targetFaceIndex].normal.clone();
 
       const duration = 520;
       const startTime = performance.now();
 
-      console.log('Rodando:', {
-        currentOctaFace: `O${currentOctaFaceIndex + 1}`,
-        targetOctaFace: `O${targetFaceIndex + 1}`,
-        sharedEdgeVertexIds: neighbor.edgeVertexIds,
-        sharedEdge: neighbor.edgePoints.map(v => v.toArray().map(x => Number(x.toFixed(3)))),
-        currentTetraBottomFace: `T${currentTetraBottomFaceIndex + 1}`,
-        valid: true
+      console.log('Rodando visualmente', {
+        from: `O${startFace + 1}`,
+        to: `O${targetFaceIndex + 1}`,
+        oldBottom: `T${currentTetraBottomFaceIndex + 1}`,
+        newBottom: `T${nextBottom + 1}`,
+        sharedEdge: neighbor.edgeVertexIds
       });
 
-      function animate(now) {
+      function animateRoll(now) {
         const rawT = Math.min(1, (now - startTime) / duration);
         const t = easeInOutCubic(rawT);
-
-        const stepAngle = rollAngle * t;
-        tetraGroup.quaternion.copy(startQuat);
-        tetraGroup.position.copy(startPos);
-        tetraGroup.updateMatrixWorld(true);
-
-        const delta = new THREE.Quaternion().setFromAxisAngle(axis, stepAngle);
-        tetraGroup.quaternion.premultiply(delta);
-        tetraGroup.position.sub(edgePivot).applyQuaternion(delta).add(edgePivot);
+        tetraGroup.position.lerpVectors(startPos, endPose.pos, t);
+        tetraGroup.quaternion.slerpQuaternions(startQuat, endPose.quat, t);
+        const lift = Math.sin(Math.PI * t) * 0.18;
+        const blendedNormal = fromNormal.clone().lerp(toNormal, t).normalize();
+        tetraGroup.position.addScaledVector(blendedNormal, lift);
         tetraGroup.updateMatrixWorld(true);
 
         if (rawT < 1) {
-          requestAnimationFrame(animate);
+          requestAnimationFrame(animateRoll);
         } else {
           currentOctaFaceIndex = targetFaceIndex;
-          const octaTargetNormal = toFace.normal.clone();
-          let bestFace = 0;
-          let minDot = Infinity;
-          for (let i = 0; i < tetraFaces.length; i++) {
-            const d = getTetraFaceWorldNormal(i).dot(octaTargetNormal);
-            if (d < minDot) {
-              minDot = d;
-              bestFace = i;
-            }
-          }
-          currentTetraBottomFaceIndex = bestFace;
-          tetraOrientation = `provisional-${moves + 1}`;
-          placeTetraOnOctaFace(currentOctaFaceIndex, currentTetraBottomFaceIndex);
+          currentTetraBottomFaceIndex = nextBottom;
+          currentSpin = nextSpin;
+          applyTetraPose(currentOctaFaceIndex, currentTetraBottomFaceIndex, currentSpin);
           moves += 1;
           updateFaceMaterials();
           updateHUD();
-
-          console.log('Movimiento completado:', {
-            currentOctaFace: `O${currentOctaFaceIndex + 1}`,
-            tetraBottomFace: `T${currentTetraBottomFaceIndex + 1}`,
-            tetraOrientation
-          });
-
           isAnimating = false;
         }
       }
 
-      requestAnimationFrame(animate);
+      requestAnimationFrame(animateRoll);
     }
 
     function onPointerDown(event) {
       if (isAnimating) return;
-
       const rect = renderer.domElement.getBoundingClientRect();
-      const x = event.clientX ?? event.touches?.[0]?.clientX;
-      const y = event.clientY ?? event.touches?.[0]?.clientY;
-      if (x == null || y == null) return;
-
+      const x = event.clientX;
+      const y = event.clientY;
       pointer.x = ((x - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((y - rect.top) / rect.height) * 2 + 1;
-
       raycaster.setFromCamera(pointer, camera);
-      const meshes = octaFaces.map(f => f.mesh);
-      const hits = raycaster.intersectObjects(meshes, false);
-
-      if (hits.length === 0) return;
-
+      const hits = raycaster.intersectObjects(octaFaces.map(f => f.mesh), false);
+      if (!hits.length) return;
       const faceIndex = hits[0].object.userData.faceIndex;
       if (faceIndex === currentOctaFaceIndex) return;
-
       if (!isNeighbor(faceIndex)) {
-        console.log('Movimiento inválido: cara no vecina', {
-          current: `O${currentOctaFaceIndex + 1}`,
-          clicked: `O${faceIndex + 1}`
-        });
+        console.log('Movimiento inválido: cara no vecina', { current: `O${currentOctaFaceIndex + 1}`, clicked: `O${faceIndex + 1}` });
         return;
       }
-
       rollToFace(faceIndex);
     }
 
     function resetGame() {
       currentOctaFaceIndex = 0;
       currentTetraBottomFaceIndex = 0;
-      tetraOrientation = 'provisional';
+      currentSpin = 0;
       moves = 0;
       isAnimating = false;
-      currentSpin = 0;
-      placeTetraOnOctaFace(0, 0, 0);
+      console.clear();
+      applyTetraPose(currentOctaFaceIndex, currentTetraBottomFaceIndex, currentSpin);
       updateFaceMaterials();
       updateHUD();
-      console.clear();
       console.log('Reset completo');
     }
 
@@ -767,11 +614,7 @@
         const r = 10 + Math.random() * 10;
         const theta = Math.random() * Math.PI * 2;
         const phi = Math.acos(THREE.MathUtils.randFloatSpread(2));
-        positions.push(
-          r * Math.sin(phi) * Math.cos(theta),
-          r * Math.sin(phi) * Math.sin(theta),
-          r * Math.cos(phi)
-        );
+        positions.push(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
       }
       starGeom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.018, transparent: true, opacity: 0.52 });
@@ -779,7 +622,6 @@
     }
 
     addAtmosphere();
-    initDebugHelpers();
     resetGame();
 
     function onResize() {
@@ -788,17 +630,13 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     }
-
     window.addEventListener('resize', onResize);
 
     function animate() {
       controls.update();
-      updateTetraLabelsFacing();
-      updateOctaLabelsFacing();
       renderer.render(scene, camera);
       requestAnimationFrame(animate);
     }
-
     animate();
   </script>
 </body>
