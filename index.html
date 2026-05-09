@@ -578,15 +578,36 @@
       return bestAngle;
     }
 
-    function mapsMatch(a, b, faceIndex = SPECIAL_TETRA_FACE) {
-      return tetraFaces[faceIndex].ids.every(tid => a.get(tid) === b.get(tid));
+    function tangentDirectionOfPlane(plane, faceNormal) {
+      scene.updateMatrixWorld(true);
+      const dir = new THREE.Vector3(0, 1, 0).transformDirection(plane.matrixWorld).normalize();
+      const tangent = dir.sub(faceNormal.clone().multiplyScalar(dir.dot(faceNormal)));
+      if (tangent.lengthSq() < 0.000001) return new THREE.Vector3(0, 0, 0);
+      return tangent.normalize();
     }
 
     function checkMatch() {
       if (currentOctaFaceIndex !== targetFaceIndex) return;
       if (currentTetraBottomFaceIndex !== SPECIAL_TETRA_FACE) return;
-      const required = makeContactMap(targetFaceIndex, SPECIAL_TETRA_FACE, targetOrientation);
-      if (!mapsMatch(contactMap, required, SPECIAL_TETRA_FACE)) return;
+
+      const faceNormal = octaFaces[currentOctaFaceIndex].normal.clone();
+      const targetUp = tangentDirectionOfPlane(targetMarker, faceNormal);
+      const tetraUp = tangentDirectionOfPlane(tetraMarker, faceNormal);
+
+      // Ojo: las dos T están en superficies enfrentadas.
+      // La T del octaedro mira hacia fuera del octaedro; la T del tetraedro, cuando está apoyada,
+      // mira hacia dentro, contra el octaedro. Por eso, para que los dibujos coincidan físicamente,
+      // sus ejes visuales tangenciales deben ser OPUESTOS en coordenadas mundo.
+      const alignment = tetraUp.dot(targetUp.clone().negate());
+      console.log('Check T match', {
+        targetFace: targetFaceIndex,
+        targetOrientation,
+        alignment: Number(alignment.toFixed(4)),
+        rule: 'match si alignment > 0.82 porque las T están cara contra cara'
+      });
+
+      if (alignment < 0.82) return;
+
       score += 1;
       updateHUD();
       spawnTarget();
