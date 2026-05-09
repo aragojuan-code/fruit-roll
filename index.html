@@ -598,6 +598,43 @@
       return Math.atan2(sin, cos);
     }
 
+    function octaOutsideMargin(point) {
+      // Para un octaedro centrado en el origen con vértices en ±OCTA_R sobre los ejes:
+      // interior si |x| + |y| + |z| < OCTA_R.
+      return Math.abs(point.x) + Math.abs(point.y) + Math.abs(point.z) - OCTA_R;
+    }
+
+    function minTetraOutsideMarginForRotation(startPos, startQuat, axis, pivot, angle) {
+      const q = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+      let minMargin = Infinity;
+      for (const v of rawTetraVertices) {
+        const world = v.clone().applyQuaternion(startQuat).add(startPos);
+        const rotated = transformByAxis(world, q, pivot);
+        minMargin = Math.min(minMargin, octaOutsideMargin(rotated));
+      }
+      return minMargin;
+    }
+
+    function chooseExteriorRollAngle(baseAngle, startPos, startQuat, axis, pivot) {
+      // Matemáticamente, baseAngle y baseAngle ± 2π dejan la misma orientación final.
+      // Visualmente, uno puede pasar por dentro del octaedro y otro por fuera.
+      // Elegimos el candidato cuyo punto medio mantiene el tetraedro más fuera.
+      const candidates = [baseAngle, baseAngle + Math.PI * 2, baseAngle - Math.PI * 2];
+      let bestAngle = baseAngle;
+      let bestScore = -Infinity;
+      for (const candidate of candidates) {
+        const halfScore = minTetraOutsideMarginForRotation(startPos, startQuat, axis, pivot, candidate * 0.5);
+        const quarterScore = minTetraOutsideMarginForRotation(startPos, startQuat, axis, pivot, candidate * 0.25);
+        const threeQuarterScore = minTetraOutsideMarginForRotation(startPos, startQuat, axis, pivot, candidate * 0.75);
+        const score = Math.min(halfScore, quarterScore, threeQuarterScore) - Math.abs(candidate) * 0.0001;
+        if (score > bestScore) {
+          bestScore = score;
+          bestAngle = candidate;
+        }
+      }
+      return bestAngle;
+    }
+
     function rollToFace(targetFaceIndex) {
       if (isAnimating) return;
       const neighbor = getNeighborData(targetFaceIndex);
@@ -636,7 +673,8 @@
       const startQuat = tetraGroup.quaternion.clone();
       const newBottomNormalNow = getTetraFaceWorldNormal(rollState.newBottomFaceIndex);
       const requiredBottomNormal = octaFaces[targetFaceIndex].normal.clone().negate();
-      const angle = signedAngleAroundAxis(newBottomNormalNow, requiredBottomNormal, axis);
+      const baseAngle = signedAngleAroundAxis(newBottomNormalNow, requiredBottomNormal, axis);
+      const angle = chooseExteriorRollAngle(baseAngle, startPos, startQuat, axis, pivot);
       const endPose = poseForMapping(targetFaceIndex, rollState.newBottomFaceIndex, rollState.newMap);
 
       const duration = 720;
@@ -649,7 +687,8 @@
         newBottom: `T${rollState.newBottomFaceIndex + 1}`,
         sharedOctaEdge: neighbor.edgeVertexIds,
         sharedTetraEdge: sharedTetraIds,
-        angleDeg: Number(THREE.MathUtils.radToDeg(angle).toFixed(3))
+        baseAngleDeg: Number(THREE.MathUtils.radToDeg(baseAngle).toFixed(3)),
+        chosenAngleDeg: Number(THREE.MathUtils.radToDeg(angle).toFixed(3))
       });
 
       function animateRoll(now) {
