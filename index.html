@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Tetra sobre Octaedro — prototipo</title>
+  <style>
+    :root {
+      --bg: #070a10;
+      --panel: rgba(12, 16, 26, 0.72);
+      --panel-border: rgba(255,255,255,0.12);
+      --text: #eef5ff;
+      --muted: #9aa8bb;
+      --green: #49f0b4;
+      --green-soft: rgba(73,240,180,0.28);
+      --blue: #75a7ff;
+      --warn: #ffd166;
+      --bad: #ff5d7a;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 25%, #17233a 0%, var(--bg) 48%, #02030a 100%);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      touch-action: none;
+    }
+
+    #app {
+      position: fixed;
+      inset: 0;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .hud {
+      position: fixed;
+      top: max(14px, env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(720px, calc(100vw - 28px));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--panel-border);
+      background: var(--panel);
+      backdrop-filter: blur(12px);
+      border-radius: 18px;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+      z-index: 5;
+    }
+
+    .title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .title strong {
+      font-size: 15px;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .title span {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stats {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      padding: 7px 9px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .pill b { color: var(--text); }
+
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 12px;
+      color: #06110e;
+      background: linear-gradient(135deg, #40e7b1, #a7ffe9);
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 8px 22px rgba(73,240,180,0.18);
+    }
+
+    button:active { transform: translateY(1px); }
+
+    .hint {
+      position: fixed;
+      bottom: max(14px, env(safe-area-inset-bottom));
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(620px, calc(100vw - 28px));
+      padding: 10px 12px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(8, 12, 20, 0.56);
+      backdrop-filter: blur(10px);
+      border-radius: 16px;
+      z-index: 5;
+      pointer-events: none;
+    }
+
+    @media (max-width: 620px) {
+      .hud {
+        align-items: flex-start;
+      }
+      .stats {
+        gap: 6px;
+      }
+      .pill {
+        padding: 6px 8px;
+        font-size: 11px;
+      }
+      .title strong { font-size: 14px; }
+      .title span { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div class="hud">
+    <div class="title">
+      <strong>Tetra sobre Octaedro</strong>
+      <span>Click/tap en una cara vecina para rodar</span>
+    </div>
+    <div class="stats">
+      <div class="pill">Octa: <b id="octaFace">O1</b></div>
+      <div class="pill">Tetra abajo: <b id="tetraFace">T1</b></div>
+      <div class="pill">Movs: <b id="moves">0</b></div>
+      <button id="resetBtn">Reset</button>
+    </div>
+  </div>
+
+  <div class="hint">
+    Gira la cámara con un dedo/ratón. Zoom con rueda o pellizco. Las caras verdes suaves son movimientos válidos.
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    const app = document.getElementById('app');
+    const octaFaceEl = document.getElementById('octaFace');
+    const tetraFaceEl = document.getElementById('tetraFace');
+    const movesEl = document.getElementById('moves');
+    const resetBtn = document.getElementById('resetBtn');
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x070a10, 8, 18);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(4.4, 3.2, 5.2);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    app.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.target.set(0, 0, 0);
+    controls.minDistance = 3.6;
+    controls.maxDistance = 10;
+    controls.enablePan = false;
+
+    scene.add(new THREE.HemisphereLight(0x99bbff, 0x111018, 1.8));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
+    keyLight.position.set(4, 5, 4);
+    scene.add(keyLight);
+
+    const rimLight = new THREE.PointLight(0x49f0b4, 5, 10);
+    rimLight.position.set(-3, 2, 3);
+    scene.add(rimLight);
+
+    const boardGroup = new THREE.Group();
+    scene.add(boardGroup);
+
+    const tetraGroup = new THREE.Group();
+    scene.add(tetraGroup);
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+
+    const OCTA_R = 2.15;
+    const TETRA_R = 0.62;
+    const SURFACE_GAP = 0.045;
+
+    const octaColors = [
+      0x29374e, 0x314463, 0x263e56, 0x3d315b,
+      0x203f3a, 0x4c362d, 0x323d55, 0x442f4d
+    ];
+
+    const tetraColors = [0xff5478, 0xffd166, 0x49f0b4, 0x75a7ff];
+
+    const baseOctaMaterial = {
+      roughness: 0.58,
+      metalness: 0.06,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.96
+    };
+
+    const currentMaterial = new THREE.MeshStandardMaterial({
+      color: 0x49f0b4,
+      emissive: 0x153e32,
+      roughness: 0.38,
+      metalness: 0.08,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.98
+    });
+
+    const neighborMaterial = new THREE.MeshStandardMaterial({
+      color: 0x274c43,
+      emissive: 0x10382f,
+      roughness: 0.42,
+      metalness: 0.06,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.95
+    });
+
+    function makeTextSprite(text, options = {}) {
+      const {
+        fontSize = 72,
+        color = '#ffffff',
+        bg = 'rgba(0,0,0,0)',
+        padding = 22,
+        scale = 0.28
+      } = options;
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.font = `800 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
+      const metrics = ctx.measureText(text);
+      canvas.width = Math.ceil(metrics.width + padding * 2);
+      canvas.height = Math.ceil(fontSize + padding * 2);
+
+      ctx.font = `800 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+      ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 1);
+      ctx.fillStyle = color;
+      ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set((canvas.width / canvas.height) * scale, scale, 1);
+      return sprite;
+    }
+
+    function faceNormal(a, b, c) {
+      return new THREE.Vector3()
+        .subVectors(b, a)
+        .cross(new THREE.Vector3().subVectors(c, a))
+        .normalize();
+    }
+
+    function faceCenter(a, b, c) {
+      return new THREE.Vector3().addVectors(a, b).add(c).multiplyScalar(1 / 3);
+    }
+
+    function makeTriangleMesh(a, b, c, material) {
+      const geom = new THREE.BufferGeometry();
+      const vertices = new Float32Array([
+        a.x, a.y, a.z,
+        b.x, b.y, b.z,
+        c.x, c.y, c.z
+      ]);
+      geom.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+      geom.setIndex([0, 1, 2]);
+      geom.computeVertexNormals();
+      return new THREE.Mesh(geom, material);
+    }
+
+    function makeEdgeLine(points, color = 0xffffff, opacity = 0.22) {
+      const geom = new THREE.BufferGeometry().setFromPoints(points);
+      const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+      return new THREE.LineLoop(geom, mat);
+    }
+
+    const octaVertices = [
+      new THREE.Vector3( OCTA_R, 0, 0), // 0 +X
+      new THREE.Vector3(-OCTA_R, 0, 0), // 1 -X
+      new THREE.Vector3(0,  OCTA_R, 0), // 2 +Y
+      new THREE.Vector3(0, -OCTA_R, 0), // 3 -Y
+      new THREE.Vector3(0, 0,  OCTA_R), // 4 +Z
+      new THREE.Vector3(0, 0, -OCTA_R)  // 5 -Z
+    ];
+
+    // 8 triangular faces. Vertex order is adjusted so normals point outward.
+    const octaFaceVertexIndices = [
+      [0, 2, 4], [4, 2, 1], [1, 2, 5], [5, 2, 0],
+      [4, 3, 0], [1, 3, 4], [5, 3, 1], [0, 3, 5]
+    ];
+
+    const octaFaces = [];
+
+    function buildOctahedronBoard() {
+      boardGroup.clear();
+      octaFaces.length = 0;
+
+      octaFaceVertexIndices.forEach((ids, index) => {
+        const a = octaVertices[ids[0]].clone();
+        const b = octaVertices[ids[1]].clone();
+        const c = octaVertices[ids[2]].clone();
+        let normal = faceNormal(a, b, c);
+        const center = faceCenter(a, b, c);
+
+        if (normal.dot(center) < 0) {
+          [ids[1], ids[2]] = [ids[2], ids[1]];
+          b.copy(octaVertices[ids[1]]);
+          c.copy(octaVertices[ids[2]]);
+          normal = faceNormal(a, b, c);
+        }
+
+        const material = new THREE.MeshStandardMaterial({
+          ...baseOctaMaterial,
+          color: octaColors[index]
+        });
+
+        const mesh = makeTriangleMesh(a, b, c, material);
+        mesh.userData.type = 'octaFace';
+        mesh.userData.faceIndex = index;
+        boardGroup.add(mesh);
+
+        const edge = makeEdgeLine([a, b, c], 0xffffff, 0.18);
+        boardGroup.add(edge);
+
+        const label = makeTextSprite(`O${index + 1}`, { color: '#eef5ff', fontSize: 74, scale: 0.33 });
+        label.position.copy(center).addScaledVector(normal, 0.035);
+        label.userData.normal = normal.clone();
+        boardGroup.add(label);
+
+        octaFaces.push({
+          index,
+          ids: [...ids],
+          vertices: [a, b, c],
+          center,
+          normal,
+          mesh,
+          material,
+          label,
+          neighbors: []
+        });
+      });
+    }
+
+    function sharedVertices(faceA, faceB) {
+      return faceA.ids.filter(id => faceB.ids.includes(id));
+    }
+
+    function computeNeighbors() {
+      octaFaces.forEach(face => face.neighbors = []);
+      for (let i = 0; i < octaFaces.length; i++) {
+        for (let j = i + 1; j < octaFaces.length; j++) {
+          const shared = sharedVertices(octaFaces[i], octaFaces[j]);
+          if (shared.length === 2) {
+            const edgePoints = shared.map(id => octaVertices[id].clone());
+            octaFaces[i].neighbors.push({ faceIndex: j, edgeVertexIds: shared, edgePoints });
+            octaFaces[j].neighbors.push({ faceIndex: i, edgeVertexIds: shared, edgePoints });
+          }
+        }
+      }
+    }
+
+    buildOctahedronBoard();
+    computeNeighbors();
+
+    // Tetrahedron geometry defined manually so each face can be an independent mesh and label.
+    const rawTetraVertices = [
+      new THREE.Vector3( 1,  1,  1),
+      new THREE.Vector3(-1, -1,  1),
+      new THREE.Vector3(-1,  1, -1),
+      new THREE.Vector3( 1, -1, -1)
+    ].map(v => v.normalize().multiplyScalar(TETRA_R));
+
+    const tetraFaceVertexIndices = [
+      [0, 2, 1],
+      [0, 1, 3],
+      [0, 3, 2],
+      [1, 2, 3]
+    ];
+
+    const tetraFaces = [];
+
+    function buildTetrahedron() {
+      tetraGroup.clear();
+      tetraFaces.length = 0;
+
+      tetraFaceVertexIndices.forEach((ids, index) => {
+        const a = rawTetraVertices[ids[0]].clone();
+        const b = rawTetraVertices[ids[1]].clone();
+        const c = rawTetraVertices[ids[2]].clone();
+        const normal = faceNormal(a, b, c);
+        const center = faceCenter(a, b, c);
+
+        const mat = new THREE.MeshStandardMaterial({
+          color: tetraColors[index],
+          roughness: 0.34,
+          metalness: 0.08,
+          side: THREE.DoubleSide
+        });
+
+        const mesh = makeTriangleMesh(a, b, c, mat);
+        tetraGroup.add(mesh);
+
+        const edge = makeEdgeLine([a, b, c], 0x05070b, 0.42);
+        tetraGroup.add(edge);
+
+        const label = makeTextSprite(`T${index + 1}`, {
+          color: index === 1 ? '#1a1200' : '#06100e',
+          fontSize: 68,
+          scale: 0.22
+        });
+        label.position.copy(center).addScaledVector(normal, 0.022);
+        tetraGroup.add(label);
+
+        tetraFaces.push({ index, ids, center, normal, mesh, label });
+      });
+    }
+
+    buildTetrahedron();
+
+    const downLocalTetraFaceIndex = 0;
+    let currentOctaFaceIndex = 0;
+    let currentTetraBottomFaceIndex = 0;
+    let tetraOrientation = 'provisional';
+    let moves = 0;
+    let isAnimating = false;
+
+    function getTetraFaceWorldNormal(faceIndex) {
+      return tetraFaces[faceIndex].normal.clone().transformDirection(tetraGroup.matrixWorld).normalize();
+    }
+
+    function getTetraFaceWorldCenter(faceIndex) {
+      return tetraFaces[faceIndex].center.clone().applyMatrix4(tetraGroup.matrixWorld);
+    }
+
+    function alignTetraToOctaFace(faceIndex, preserveSpin = false) {
+      const face = octaFaces[faceIndex];
+      const targetBottomNormal = face.normal.clone().multiplyScalar(-1);
+      const localBottomNormal = tetraFaces[downLocalTetraFaceIndex].normal.clone();
+
+      const q = new THREE.Quaternion().setFromUnitVectors(localBottomNormal, targetBottomNormal);
+
+      if (preserveSpin) {
+        // Reserved for future real orientation logic.
+      }
+
+      tetraGroup.quaternion.copy(q);
+      const bottomCenterWorld = tetraFaces[downLocalTetraFaceIndex].center.clone().applyQuaternion(tetraGroup.quaternion);
+      const targetBottomCenter = face.center.clone().addScaledVector(face.normal, SURFACE_GAP);
+      tetraGroup.position.copy(targetBottomCenter.sub(bottomCenterWorld));
+      tetraGroup.updateMatrixWorld(true);
+    }
+
+    function updateTetraLabelsFacing() {
+      // Sprites face the camera automatically, so no action required.
+    }
+
+    function updateOctaLabelsFacing() {
+      // Sprites face the camera automatically, while staying attached to face centers.
+    }
+
+    function updateFaceMaterials() {
+      octaFaces.forEach(face => {
+        face.mesh.material = face.material;
+        face.mesh.scale.setScalar(1);
+      });
+
+      octaFaces[currentOctaFaceIndex].mesh.material = currentMaterial;
+
+      for (const n of octaFaces[currentOctaFaceIndex].neighbors) {
+        octaFaces[n.faceIndex].mesh.material = neighborMaterial;
+      }
+    }
+
+    function updateHUD() {
+      octaFaceEl.textContent = `O${currentOctaFaceIndex + 1}`;
+      tetraFaceEl.textContent = `T${currentTetraBottomFaceIndex + 1}`;
+      movesEl.textContent = String(moves);
+    }
+
+    function isNeighbor(targetFaceIndex) {
+      return octaFaces[currentOctaFaceIndex].neighbors.some(n => n.faceIndex === targetFaceIndex);
+    }
+
+    function getNeighborData(targetFaceIndex) {
+      return octaFaces[currentOctaFaceIndex].neighbors.find(n => n.faceIndex === targetFaceIndex);
+    }
+
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function rollToFace(targetFaceIndex) {
+      if (isAnimating) return;
+
+      const neighbor = getNeighborData(targetFaceIndex);
+      if (!neighbor) {
+        console.log('Movimiento inválido:', {
+          current: `O${currentOctaFaceIndex + 1}`,
+          target: `O${targetFaceIndex + 1}`
+        });
+        return;
+      }
+
+      isAnimating = true;
+
+      const fromFace = octaFaces[currentOctaFaceIndex];
+      const toFace = octaFaces[targetFaceIndex];
+      const edgeA = neighbor.edgePoints[0];
+      const edgeB = neighbor.edgePoints[1];
+      const edgeDir = new THREE.Vector3().subVectors(edgeB, edgeA).normalize();
+
+      const startPos = tetraGroup.position.clone();
+      const startQuat = tetraGroup.quaternion.clone();
+
+      // End pose: visually correct resting pose on the destination face.
+      const savedPos = tetraGroup.position.clone();
+      const savedQuat = tetraGroup.quaternion.clone();
+      alignTetraToOctaFace(targetFaceIndex, true);
+      const endPos = tetraGroup.position.clone();
+      const endQuat = tetraGroup.quaternion.clone();
+      tetraGroup.position.copy(savedPos);
+      tetraGroup.quaternion.copy(savedQuat);
+      tetraGroup.updateMatrixWorld(true);
+
+      const rollAngle = fromFace.normal.angleTo(toFace.normal);
+      const rollSign = Math.sign(new THREE.Vector3().crossVectors(fromFace.normal, toFace.normal).dot(edgeDir)) || 1;
+      const axis = edgeDir.clone();
+
+      const duration = 520;
+      const startTime = performance.now();
+
+      console.log('Rodando:', {
+        currentOctaFace: `O${currentOctaFaceIndex + 1}`,
+        targetOctaFace: `O${targetFaceIndex + 1}`,
+        sharedEdgeVertexIds: neighbor.edgeVertexIds,
+        sharedEdge: neighbor.edgePoints.map(v => v.toArray().map(x => Number(x.toFixed(3)))),
+        currentTetraBottomFace: `T${currentTetraBottomFaceIndex + 1}`,
+        valid: true
+      });
+
+      function animate(now) {
+        const rawT = Math.min(1, (now - startTime) / duration);
+        const t = easeInOutCubic(rawT);
+
+        // Main pose interpolation, stable and readable.
+        tetraGroup.position.lerpVectors(startPos, endPos, t);
+        tetraGroup.quaternion.slerpQuaternions(startQuat, endQuat, t);
+
+        // Add a small arcing lift so it feels like a roll instead of a slide.
+        const lift = Math.sin(Math.PI * t) * 0.15;
+        const blendedNormal = fromFace.normal.clone().lerp(toFace.normal, t).normalize();
+        tetraGroup.position.addScaledVector(blendedNormal, lift);
+
+        // Subtle extra rotation around the shared edge for physical feeling.
+        const extra = new THREE.Quaternion().setFromAxisAngle(axis, rollSign * rollAngle * Math.sin(Math.PI * t) * 0.08);
+        tetraGroup.quaternion.premultiply(extra);
+
+        if (rawT < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          currentOctaFaceIndex = targetFaceIndex;
+
+          // Provisional face update: next prompt should replace this with exact tetrahedral orientation logic.
+          currentTetraBottomFaceIndex = (currentTetraBottomFaceIndex + 1) % 4;
+          tetraOrientation = `provisional-${moves + 1}`;
+
+          alignTetraToOctaFace(currentOctaFaceIndex, true);
+          moves += 1;
+          updateFaceMaterials();
+          updateHUD();
+
+          console.log('Movimiento completado:', {
+            currentOctaFace: `O${currentOctaFaceIndex + 1}`,
+            tetraBottomFace: `T${currentTetraBottomFaceIndex + 1}`,
+            tetraOrientation
+          });
+
+          isAnimating = false;
+        }
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    function onPointerDown(event) {
+      if (isAnimating) return;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = event.clientX ?? event.touches?.[0]?.clientX;
+      const y = event.clientY ?? event.touches?.[0]?.clientY;
+      if (x == null || y == null) return;
+
+      pointer.x = ((x - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((y - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(pointer, camera);
+      const meshes = octaFaces.map(f => f.mesh);
+      const hits = raycaster.intersectObjects(meshes, false);
+
+      if (hits.length === 0) return;
+
+      const faceIndex = hits[0].object.userData.faceIndex;
+      if (faceIndex === currentOctaFaceIndex) return;
+
+      if (!isNeighbor(faceIndex)) {
+        console.log('Movimiento inválido: cara no vecina', {
+          current: `O${currentOctaFaceIndex + 1}`,
+          clicked: `O${faceIndex + 1}`
+        });
+        return;
+      }
+
+      rollToFace(faceIndex);
+    }
+
+    function resetGame() {
+      currentOctaFaceIndex = 0;
+      currentTetraBottomFaceIndex = 0;
+      tetraOrientation = 'provisional';
+      moves = 0;
+      isAnimating = false;
+      alignTetraToOctaFace(currentOctaFaceIndex);
+      updateFaceMaterials();
+      updateHUD();
+      console.clear();
+      console.log('Reset completo');
+    }
+
+    renderer.domElement.addEventListener('pointerdown', onPointerDown, { passive: true });
+    resetBtn.addEventListener('click', resetGame);
+
+    function addAtmosphere() {
+      const starGeom = new THREE.BufferGeometry();
+      const positions = [];
+      for (let i = 0; i < 360; i++) {
+        const r = 10 + Math.random() * 10;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(THREE.MathUtils.randFloatSpread(2));
+        positions.push(
+          r * Math.sin(phi) * Math.cos(theta),
+          r * Math.sin(phi) * Math.sin(theta),
+          r * Math.cos(phi)
+        );
+      }
+      starGeom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.018, transparent: true, opacity: 0.52 });
+      scene.add(new THREE.Points(starGeom, starMat));
+    }
+
+    addAtmosphere();
+    resetGame();
+
+    function onResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    }
+
+    window.addEventListener('resize', onResize);
+
+    function animate() {
+      controls.update();
+      updateTetraLabelsFacing();
+      updateOctaLabelsFacing();
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+  </script>
+</body>
+</html>
