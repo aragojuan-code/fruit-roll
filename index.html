@@ -262,6 +262,44 @@
       return new THREE.LineLoop(geom, mat);
     }
 
+    function makeRoundedEdge(a, b, radius, material) {
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      const dir = new THREE.Vector3().subVectors(b, a);
+      const len = dir.length();
+      const geom = new THREE.CylinderGeometry(radius, radius, len, 14, 1, true);
+      const mesh = new THREE.Mesh(geom, material);
+      mesh.position.copy(mid);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      return mesh;
+    }
+
+    function makeRoundedVertex(pos, radius, material) {
+      const geom = new THREE.SphereGeometry(radius, 16, 12);
+      const mesh = new THREE.Mesh(geom, material);
+      mesh.position.copy(pos);
+      return mesh;
+    }
+
+    function addRoundedDetails(group, vertices, faceIndexList, radiusEdge, radiusVertex, color) {
+      const mat = new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.44,
+        metalness: 0.05,
+        transparent: false
+      });
+      const edgeKeys = new Set();
+      for (const face of faceIndexList) {
+        const pairs = [[face[0], face[1]], [face[1], face[2]], [face[2], face[0]]];
+        for (const [i, j] of pairs) {
+          const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+          if (edgeKeys.has(key)) continue;
+          edgeKeys.add(key);
+          group.add(makeRoundedEdge(vertices[i], vertices[j], radiusEdge, mat));
+        }
+      }
+      for (const v of vertices) group.add(makeRoundedVertex(v, radiusVertex, mat));
+    }
+
     function attachPlaneToTriangle(plane, a, b, c, normal, orientation = 0, offset = 0.018) {
       const center = faceCenter(a, b, c);
       const angle = orientation * (Math.PI * 2 / 3);
@@ -321,7 +359,9 @@
         octaFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, material, neighbors: [] });
       });
 
-      targetMarker = makeTextPlane('T', { color: '#ffe66d', stroke: 'rgba(0,0,0,0.82)', fontSize: 220, scale: 0.0029 });
+      addRoundedDetails(boardGroup, octaVertices, octaFaceVertexIndices, 0.0065, 0.014, 0x9fd7c8);
+
+      targetMarker = makeTextPlane('T', { color: '#ffe66d', stroke: 'rgba(0,0,0,0.82)', fontSize: 150, scale: 0.00235 });
       boardGroup.add(targetMarker);
     }
 
@@ -396,8 +436,10 @@
         tetraFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, edge });
       });
 
+      addRoundedDetails(tetraGroup, rawTetraVertices, tetraFaceVertexIndices, 0.006, 0.013, 0x1a2230);
+
       const special = tetraFaces[SPECIAL_TETRA_FACE];
-      tetraMarker = makeTextPlane('T', { color: '#ffffff', stroke: 'rgba(0,0,0,0.86)', fontSize: 220, scale: 0.0027 });
+      tetraMarker = makeTextPlane('T', { color: '#ffffff', stroke: 'rgba(0,0,0,0.86)', fontSize: 150, scale: 0.0022 });
       attachPlaneToTriangle(tetraMarker, special.vertices[0], special.vertices[1], special.vertices[2], special.normal, 0, 0.020);
       tetraGroup.add(tetraMarker);
     }
@@ -495,21 +537,9 @@
     }
 
     function updateFaceMaterials() {
+      // Sin iluminación de caras vecinas/actuales: el juego se lee solo por la T objetivo
+      // y la T oculta del tetraedro.
       octaFaces.forEach(face => { face.mesh.material = face.material; });
-      octaFaces[currentOctaFaceIndex].mesh.material = currentMaterial;
-      for (const n of octaFaces[currentOctaFaceIndex].neighbors) {
-        octaFaces[n.faceIndex].mesh.material = neighborMaterial;
-      }
-    }
-
-    function getOrientationCodeForSpecialFace() {
-      if (currentTetraBottomFaceIndex !== SPECIAL_TETRA_FACE) return null;
-      const n = octaFaces[currentOctaFaceIndex].normal.clone();
-      const targetUp = tangentDirectionOfPlane(targetMarker, n);
-      const tetraUp = tangentDirectionOfPlane(tetraMarker, n);
-      const same = tetraUp.dot(targetUp);
-      const opposite = tetraUp.dot(targetUp.clone().negate());
-      return { same, opposite, best: Math.max(same, opposite) };
     }
 
     function updateHUD() {
