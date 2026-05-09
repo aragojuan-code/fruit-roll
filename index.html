@@ -100,6 +100,7 @@
     <div class="stats">
       <div class="pill">Puntos: <b id="score">0</b></div>
       <div class="pill">Movs: <b id="moves">0</b></div>
+      <div class="pill">Debug: <b id="debugMatch">—</b></div>
       <button id="resetBtn">Reset</button>
     </div>
   </div>
@@ -124,6 +125,7 @@
     const app = document.getElementById('app');
     const scoreEl = document.getElementById('score');
     const movesEl = document.getElementById('moves');
+    const debugMatchEl = document.getElementById('debugMatch');
     const resetBtn = document.getElementById('resetBtn');
 
     const scene = new THREE.Scene();
@@ -500,9 +502,31 @@
       }
     }
 
+    function getOrientationCodeForSpecialFace() {
+      if (currentTetraBottomFaceIndex !== SPECIAL_TETRA_FACE) return null;
+      const n = octaFaces[currentOctaFaceIndex].normal.clone();
+      const targetUp = tangentDirectionOfPlane(targetMarker, n);
+      const tetraUp = tangentDirectionOfPlane(tetraMarker, n);
+      const same = tetraUp.dot(targetUp);
+      const opposite = tetraUp.dot(targetUp.clone().negate());
+      return { same, opposite, best: Math.max(same, opposite) };
+    }
+
     function updateHUD() {
       scoreEl.textContent = String(score);
       movesEl.textContent = String(moves);
+      const isOnTarget = currentOctaFaceIndex === targetFaceIndex;
+      const isSpecialDown = currentTetraBottomFaceIndex === SPECIAL_TETRA_FACE;
+      const info = getOrientationCodeForSpecialFace();
+      if (!isOnTarget) {
+        debugMatchEl.textContent = 'fuera';
+      } else if (!isSpecialDown) {
+        debugMatchEl.textContent = 'cara no T';
+      } else if (info) {
+        debugMatchEl.textContent = `same ${info.same.toFixed(2)} / opp ${info.opposite.toFixed(2)}`;
+      } else {
+        debugMatchEl.textContent = '—';
+      }
     }
 
     function isNeighbor(target) {
@@ -587,6 +611,7 @@
     }
 
     function checkMatch() {
+      updateHUD();
       if (currentOctaFaceIndex !== targetFaceIndex) return;
       if (currentTetraBottomFaceIndex !== SPECIAL_TETRA_FACE) return;
 
@@ -594,23 +619,34 @@
       const targetUp = tangentDirectionOfPlane(targetMarker, faceNormal);
       const tetraUp = tangentDirectionOfPlane(tetraMarker, faceNormal);
 
-      // Ojo: las dos T están en superficies enfrentadas.
-      // La T del octaedro mira hacia fuera del octaedro; la T del tetraedro, cuando está apoyada,
-      // mira hacia dentro, contra el octaedro. Por eso, para que los dibujos coincidan físicamente,
-      // sus ejes visuales tangenciales deben ser OPUESTOS en coordenadas mundo.
-      const alignment = tetraUp.dot(targetUp.clone().negate());
+      const same = tetraUp.dot(targetUp);
+      const opposite = tetraUp.dot(targetUp.clone().negate());
+
+      // En algunos móviles/cámaras es difícil saber si la lectura correcta es face-to-face
+      // o screen-facing. Para no depender de una convención errónea, mostramos ambos valores
+      // y aceptamos el alineamiento visual fuerte en cualquiera de los dos sentidos.
+      // Si quieres hacerlo más estricto luego, deja solo `opposite > 0.82`.
+      const alignment = Math.max(same, opposite);
       console.log('Check T match', {
         targetFace: targetFaceIndex,
         targetOrientation,
+        same: Number(same.toFixed(4)),
+        opposite: Number(opposite.toFixed(4)),
         alignment: Number(alignment.toFixed(4)),
-        rule: 'match si alignment > 0.82 porque las T están cara contra cara'
+        rule: 'match si max(same, opposite) > 0.82'
       });
 
       if (alignment < 0.82) return;
 
       score += 1;
+      flashTarget();
       updateHUD();
       spawnTarget();
+    }
+
+    function flashTarget() {
+      targetMarker.scale.multiplyScalar(1.22);
+      setTimeout(() => targetMarker.scale.multiplyScalar(1 / 1.22), 120);
     }
 
     function spawnTarget() {
@@ -619,6 +655,7 @@
       targetOrientation = Math.floor(Math.random() * 3);
       const f = octaFaces[targetFaceIndex];
       attachPlaneToTriangle(targetMarker, f.vertices[0], f.vertices[1], f.vertices[2], f.normal, targetOrientation, 0.030);
+      updateHUD();
     }
 
     function rollToFace(target) {
