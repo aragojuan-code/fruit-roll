@@ -639,7 +639,11 @@
       const startPos = tetraGroup.position.clone();
       const startQuat = tetraGroup.quaternion.clone();
       const rollAngle = fromFace.normal.angleTo(toFace.normal);
-      const axis = edgeDir.clone();
+      const axisCandidate = edgeDir.clone();
+      const rotatedNormal = fromFace.normal.clone().applyAxisAngle(axisCandidate, rollAngle);
+      const axis = (rotatedNormal.distanceTo(toFace.normal) <= fromFace.normal.clone().applyAxisAngle(axisCandidate.clone().negate(), rollAngle).distanceTo(toFace.normal))
+        ? axisCandidate
+        : axisCandidate.negate();
       const edgePivot = edgeA.clone().add(edgeB).multiplyScalar(0.5);
 
       const duration = 520;
