@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Fruit Roll — prototipo</title>
+  <title>Fruit Roll — Rubik tetra</title>
   <style>
     :root {
       --bg: #070a10;
@@ -31,7 +31,7 @@
       top: max(14px, env(safe-area-inset-top));
       left: 50%;
       transform: translateX(-50%);
-      width: min(680px, calc(100vw - 28px));
+      width: min(760px, calc(100vw - 28px));
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -67,7 +67,7 @@
       bottom: max(14px, env(safe-area-inset-bottom));
       left: 50%;
       transform: translateX(-50%);
-      width: min(680px, calc(100vw - 28px));
+      width: min(760px, calc(100vw - 28px));
       padding: 10px 12px;
       text-align: center;
       color: var(--muted);
@@ -94,18 +94,18 @@
 
   <div class="hud">
     <div class="title">
-      <strong>Fruit Roll</strong>
-      <span>Arrastra para girar cámara · tap corto en cara vecina para rodar</span>
+      <strong>Fruit Roll — modo Rubik</strong>
+      <span>Empieza resuelto. Tap en tetraedro = seleccionar · tap en cara vacía vecina = rodar</span>
     </div>
     <div class="stats">
-      <div class="pill">Puntos: <b id="score">0</b></div>
+      <div class="pill">Seleccionado: <b id="selectedPiece">—</b></div>
       <div class="pill">Movs: <b id="moves">0</b></div>
       <button id="resetBtn">Reset</button>
     </div>
   </div>
 
   <div class="hint">
-    Haz coincidir la T oculta del tetraedro con la T del octaedro. No aparece objetivo bajo la cara cubierta.
+    Solo rodadura: no hay giro manual. Con cuatro tetraedros y cuatro huecos, cada camino reorienta la pieza como en un Rubik.
   </div>
 
   <script type="importmap">
@@ -122,7 +122,7 @@
     import { TrackballControls } from 'three/addons/controls/TrackballControls.js';
 
     const app = document.getElementById('app');
-    const scoreEl = document.getElementById('score');
+    const selectedPieceEl = document.getElementById('selectedPiece');
     const movesEl = document.getElementById('moves');
     const resetBtn = document.getElementById('resetBtn');
 
@@ -138,7 +138,6 @@
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     app.appendChild(renderer.domElement);
 
-    // TrackballControls permite girar libremente sin el “tope” vertical de OrbitControls.
     const controls = new TrackballControls(camera, renderer.domElement);
     controls.target.set(0, 0, 0);
     controls.rotateSpeed = 3.0;
@@ -158,9 +157,9 @@
     scene.add(rimLight);
 
     const boardGroup = new THREE.Group();
-    const tetraGroup = new THREE.Group();
+    const piecesGroup = new THREE.Group();
     scene.add(boardGroup);
-    scene.add(tetraGroup);
+    scene.add(piecesGroup);
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -169,71 +168,54 @@
     const OCTA_EDGE = OCTA_R * Math.sqrt(2);
     const TETRA_CIRCUMRADIUS = OCTA_EDGE / Math.sqrt(8 / 3);
     const SURFACE_GAP = 0.001;
-    const FACE_CUT = 0.105; // recorte visual de ~1/10 de la arista
-    const SPECIAL_TETRA_FACE = 0;
+    const FACE_CUT = 0.105;
 
-    const octaColors = [0x29374e, 0x314463, 0x263e56, 0x3d315b, 0x203f3a, 0x4c362d, 0x323d55, 0x442f4d];
-    const tetraColors = [0xff5478, 0xffd166, 0x49f0b4, 0x75a7ff];
+    const RUBIK_COLORS = [
+      { name: 'azul', color: 0x2f5dff },
+      { name: 'verde', color: 0x3be48b },
+      { name: 'rojo', color: 0xff4d5a },
+      { name: 'amarillo', color: 0xffd84d }
+    ];
 
-    const baseOctaMaterial = {
-      roughness: 0.58,
-      metalness: 0.06,
-      side: THREE.DoubleSide,
-      transparent: false,
-      opacity: 1
-    };
+    const octaVertices = [
+      new THREE.Vector3( OCTA_R, 0, 0),
+      new THREE.Vector3(-OCTA_R, 0, 0),
+      new THREE.Vector3(0,  OCTA_R, 0),
+      new THREE.Vector3(0, -OCTA_R, 0),
+      new THREE.Vector3(0, 0,  OCTA_R),
+      new THREE.Vector3(0, 0, -OCTA_R)
+    ];
 
-    const currentMaterial = new THREE.MeshStandardMaterial({
-      color: 0x49f0b4,
-      emissive: 0x153e32,
-      roughness: 0.38,
-      metalness: 0.08,
-      side: THREE.DoubleSide,
-      transparent: false,
-      opacity: 1
-    });
+    const octaFaceVertexIndices = [
+      [0, 2, 4], [4, 2, 1], [1, 2, 5], [5, 2, 0],
+      [4, 3, 0], [1, 3, 4], [5, 3, 1], [0, 3, 5]
+    ];
 
-    const neighborMaterial = new THREE.MeshStandardMaterial({
-      color: 0x274c43,
-      emissive: 0x10382f,
-      roughness: 0.42,
-      metalness: 0.06,
-      side: THREE.DoubleSide,
-      transparent: false,
-      opacity: 1
-    });
+    // Caras alternas. Con tetraedros sobre estas 4 caras, la figura empieza como un tetraedro grande resuelto.
+    const SOLVED_FACE_INDICES = [0, 2, 5, 7];
 
-    function makeTextPlane(text, options = {}) {
-      const { fontSize = 180, color = '#ffffff', stroke = 'rgba(0,0,0,0.75)', padding = 18, scale = 0.0030 } = options;
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      ctx.font = `950 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
-      const metrics = ctx.measureText(text);
-      canvas.width = Math.ceil(metrics.width + padding * 2);
-      canvas.height = Math.ceil(fontSize + padding * 2);
-      ctx.font = `950 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.lineWidth = Math.max(12, fontSize * 0.13);
-      ctx.strokeStyle = stroke;
-      ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 3);
-      ctx.fillStyle = color;
-      ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 3);
+    const rawTetraVertices = [
+      new THREE.Vector3( 1,  1,  1),
+      new THREE.Vector3(-1, -1,  1),
+      new THREE.Vector3(-1,  1, -1),
+      new THREE.Vector3( 1, -1, -1)
+    ].map(v => v.normalize().multiplyScalar(TETRA_CIRCUMRADIUS));
 
-      const texture = new THREE.CanvasTexture(canvas);
-      texture.colorSpace = THREE.SRGBColorSpace;
-      texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-      const material = new THREE.MeshBasicMaterial({
-        map: texture,
-        transparent: true,
-        depthWrite: false,
-        polygonOffset: true,
-        polygonOffsetFactor: -4,
-        side: THREE.DoubleSide
-      });
-      const geometry = new THREE.PlaneGeometry(canvas.width * scale, canvas.height * scale);
-      return new THREE.Mesh(geometry, material);
-    }
+    const tetraFaceVertexIndices = [
+      [0, 2, 1],
+      [0, 1, 3],
+      [0, 3, 2],
+      [1, 2, 3]
+    ];
+
+    const tetraFaces = [];
+    const octaFaces = [];
+    const pieces = [];
+    const occupiedFaceToPiece = new Map();
+
+    let selectedPieceId = null;
+    let moves = 0;
+    let isAnimating = false;
 
     function faceNormal(a, b, c) {
       return new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).normalize();
@@ -254,23 +236,14 @@
     }
 
     function makeTriangleMesh(a, b, c, material) {
-      // Cara triangular con esquinas recortadas visualmente.
-      // Importante: esto NO cambia los vértices matemáticos usados para rodar;
-      // solo cambia el mesh visible. Así mantenemos la rodadura perfecta anterior.
       const pts = getTruncatedFacePoints(a, b, c);
       const center = faceCenter(a, b, c);
-
       const vertices = [];
       for (let i = 0; i < pts.length; i++) {
         const p1 = pts[i];
         const p2 = pts[(i + 1) % pts.length];
-        vertices.push(
-          center.x, center.y, center.z,
-          p1.x, p1.y, p1.z,
-          p2.x, p2.y, p2.z
-        );
+        vertices.push(center.x, center.y, center.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
       }
-
       const geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
       geom.computeVertexNormals();
@@ -290,11 +263,7 @@
       for (let i = 0; i < points.length; i++) {
         const p1 = points[i];
         const p2 = points[(i + 1) % points.length];
-        vertices.push(
-          center.x, center.y, center.z,
-          p1.x, p1.y, p1.z,
-          p2.x, p2.y, p2.z
-        );
+        vertices.push(center.x, center.y, center.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
       }
       const geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
@@ -315,9 +284,7 @@
       });
     }
 
-    function addFlatTruncationCaps(group, vertices, faceIndexList, color, cut = FACE_CUT) {
-      // Tapas planas y opacas para cerrar los huecos del truncado visual.
-      // No afectan a la física: la rodadura sigue usando los vértices originales.
+    function addFlatTruncationCaps(group, vertices, faceIndexList, color, cut = FACE_CUT, userData = {}) {
       const mat = new THREE.MeshStandardMaterial({
         color,
         roughness: 0.52,
@@ -326,7 +293,6 @@
         transparent: false,
         opacity: 1
       });
-
       const adjacency = new Map();
       vertices.forEach((_, i) => adjacency.set(i, new Set()));
       for (const face of faceIndexList) {
@@ -336,49 +302,48 @@
           adjacency.get(j).add(i);
         }
       }
-
       for (const [i, adj] of adjacency.entries()) {
         const vertex = vertices[i];
         const capPoints = [...adj].map(j => vertex.clone().lerp(vertices[j], cut));
         const sorted = sortCapPointsAroundVertex(vertex, capPoints);
-        group.add(makeFlatCap(sorted, mat));
+        const cap = makeFlatCap(sorted, mat);
+        cap.userData = { ...userData };
+        group.add(cap);
       }
     }
 
-    function makeEdgeLine(points, color = 0xffffff, opacity = 0.22) {
-      const geom = new THREE.BufferGeometry().setFromPoints(points);
-      const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
-      return new THREE.LineLoop(geom, mat);
+    function buildTetraFaceData() {
+      tetraFaces.length = 0;
+      tetraFaceVertexIndices.forEach((rawIds, index) => {
+        const ids = [...rawIds];
+        let a = rawTetraVertices[ids[0]].clone();
+        let b = rawTetraVertices[ids[1]].clone();
+        let c = rawTetraVertices[ids[2]].clone();
+        let normal = faceNormal(a, b, c);
+        let center = faceCenter(a, b, c);
+        if (normal.dot(center) < 0) {
+          [ids[1], ids[2]] = [ids[2], ids[1]];
+          a = rawTetraVertices[ids[0]].clone();
+          b = rawTetraVertices[ids[1]].clone();
+          c = rawTetraVertices[ids[2]].clone();
+          normal = faceNormal(a, b, c);
+          center = faceCenter(a, b, c);
+        }
+        tetraFaces.push({ index, ids, vertices: [a, b, c], center, normal });
+      });
     }
 
-    function attachPlaneToTriangle(plane, a, b, c, normal, orientation = 0, offset = 0.018) {
-      const center = faceCenter(a, b, c);
-      const angle = orientation * (Math.PI * 2 / 3);
-      const baseX = new THREE.Vector3().subVectors(b, a).normalize();
-      const xAxis = baseX.clone().applyAxisAngle(normal, angle).normalize();
-      const yAxis = new THREE.Vector3().crossVectors(normal, xAxis).normalize();
-      const basis = new THREE.Matrix4().makeBasis(xAxis, yAxis, normal);
-      plane.quaternion.setFromRotationMatrix(basis);
-      plane.position.copy(center).addScaledVector(normal, offset);
+    buildTetraFaceData();
+
+    function colorIndexForDirection(normal) {
+      let best = 0;
+      let bestDot = -Infinity;
+      for (let i = 0; i < SOLVED_FACE_INDICES.length; i++) {
+        const d = normal.dot(octaFaces[SOLVED_FACE_INDICES[i]].normal);
+        if (d > bestDot) { bestDot = d; best = i; }
+      }
+      return best;
     }
-
-    const octaVertices = [
-      new THREE.Vector3( OCTA_R, 0, 0),
-      new THREE.Vector3(-OCTA_R, 0, 0),
-      new THREE.Vector3(0,  OCTA_R, 0),
-      new THREE.Vector3(0, -OCTA_R, 0),
-      new THREE.Vector3(0, 0,  OCTA_R),
-      new THREE.Vector3(0, 0, -OCTA_R)
-    ];
-
-    const octaFaceVertexIndices = [
-      [0, 2, 4], [4, 2, 1], [1, 2, 5], [5, 2, 0],
-      [4, 3, 0], [1, 3, 4], [5, 3, 1], [0, 3, 5]
-    ];
-
-    const octaFaces = [];
-    let targetMarker = null;
-    let tetraMarker = null;
 
     function buildOctahedronBoard() {
       boardGroup.clear();
@@ -401,19 +366,32 @@
           center = faceCenter(a, b, c);
         }
 
-        const material = new THREE.MeshStandardMaterial({ ...baseOctaMaterial, color: octaColors[index] });
+        octaFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh: null, material: null, neighbors: [] });
+      });
+
+      // Necesitamos las normales de las caras resueltas antes de colorear.
+      octaFaces.forEach((face, index) => {
+        const colorIdx = colorIndexForDirection(face.normal);
+        const material = new THREE.MeshStandardMaterial({
+          color: RUBIK_COLORS[colorIdx].color,
+          roughness: 0.58,
+          metalness: 0.06,
+          side: THREE.DoubleSide,
+          transparent: false,
+          opacity: 1
+        });
+        const [a, b, c] = face.vertices;
         const mesh = makeTriangleMesh(a, b, c, material);
         mesh.userData.type = 'octaFace';
         mesh.userData.faceIndex = index;
+        face.mesh = mesh;
+        face.material = material;
+        face.colorIndex = colorIdx;
         boardGroup.add(mesh);
-        boardGroup.add(makeTruncatedEdgeLine(a, b, c, 0xffffff, 0.18));
-        octaFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, material, neighbors: [] });
+        boardGroup.add(makeTruncatedEdgeLine(a, b, c, 0xffffff, 0.16));
       });
 
       addFlatTruncationCaps(boardGroup, octaVertices, octaFaceVertexIndices, 0x1f2b3f);
-
-      targetMarker = makeTextPlane('T', { color: '#ffe66d', stroke: 'rgba(0,0,0,0.82)', fontSize: 150, scale: 0.00235 });
-      boardGroup.add(targetMarker);
     }
 
     function sharedVertices(faceA, faceB) {
@@ -436,75 +414,6 @@
 
     buildOctahedronBoard();
     computeNeighbors();
-
-    const rawTetraVertices = [
-      new THREE.Vector3( 1,  1,  1),
-      new THREE.Vector3(-1, -1,  1),
-      new THREE.Vector3(-1,  1, -1),
-      new THREE.Vector3( 1, -1, -1)
-    ].map(v => v.normalize().multiplyScalar(TETRA_CIRCUMRADIUS));
-
-    const tetraFaceVertexIndices = [
-      [0, 2, 1],
-      [0, 1, 3],
-      [0, 3, 2],
-      [1, 2, 3]
-    ];
-
-    const tetraFaces = [];
-
-    function buildTetrahedron() {
-      tetraGroup.clear();
-      tetraFaces.length = 0;
-
-      tetraFaceVertexIndices.forEach((rawIds, index) => {
-        const ids = [...rawIds];
-        let a = rawTetraVertices[ids[0]].clone();
-        let b = rawTetraVertices[ids[1]].clone();
-        let c = rawTetraVertices[ids[2]].clone();
-        let normal = faceNormal(a, b, c);
-        let center = faceCenter(a, b, c);
-
-        if (normal.dot(center) < 0) {
-          [ids[1], ids[2]] = [ids[2], ids[1]];
-          a = rawTetraVertices[ids[0]].clone();
-          b = rawTetraVertices[ids[1]].clone();
-          c = rawTetraVertices[ids[2]].clone();
-          normal = faceNormal(a, b, c);
-          center = faceCenter(a, b, c);
-        }
-
-        const mat = new THREE.MeshStandardMaterial({
-          color: tetraColors[index],
-          roughness: 0.34,
-          metalness: 0.08,
-          side: THREE.DoubleSide
-        });
-        const mesh = makeTriangleMesh(a, b, c, mat);
-        tetraGroup.add(mesh);
-        const edge = makeTruncatedEdgeLine(a, b, c, 0x05070b, 0.55);
-        tetraGroup.add(edge);
-        tetraFaces.push({ index, ids, vertices: [a, b, c], center, normal, mesh, edge });
-      });
-
-      addFlatTruncationCaps(tetraGroup, rawTetraVertices, tetraFaceVertexIndices, 0x1f2b3f);
-
-      const special = tetraFaces[SPECIAL_TETRA_FACE];
-      tetraMarker = makeTextPlane('T', { color: '#ffffff', stroke: 'rgba(0,0,0,0.86)', fontSize: 150, scale: 0.0022 });
-      attachPlaneToTriangle(tetraMarker, special.vertices[0], special.vertices[1], special.vertices[2], special.normal, 0, 0.020);
-      tetraGroup.add(tetraMarker);
-    }
-
-    buildTetrahedron();
-
-    let currentOctaFaceIndex = 0;
-    let currentTetraBottomFaceIndex = 0;
-    let moves = 0;
-    let score = 0;
-    let isAnimating = false;
-    let contactMap = new Map();
-    let targetFaceIndex = 1;
-    let targetOrientation = 0;
 
     function basisFromOrderedTriangle(points, desiredNormal) {
       const p0 = points[0].clone();
@@ -562,69 +471,119 @@
       return map;
     }
 
-    function getTetraFaceWorldNormal(faceIndex) {
-      return tetraFaces[faceIndex].normal.clone().transformDirection(tetraGroup.matrixWorld).normalize();
+    function applyPiecePose(piece) {
+      const pose = poseForMapping(piece.octaFaceIndex, piece.bottomFaceIndex, piece.contactMap);
+      piece.group.position.copy(pose.pos);
+      piece.group.quaternion.copy(pose.quat);
+      piece.group.updateMatrixWorld(true);
+      updatePieceVisibility(piece);
     }
 
-    function getTetraVertexWorld(vertexId) {
-      return rawTetraVertices[vertexId].clone().applyMatrix4(tetraGroup.matrixWorld);
+    function getPieceFaceWorldNormal(piece, faceIndex) {
+      return tetraFaces[faceIndex].normal.clone().transformDirection(piece.group.matrixWorld).normalize();
     }
 
-    function updateTetraFaceVisibility({ hideBottom = true } = {}) {
-      tetraFaces.forEach((face, i) => {
-        const isBottom = hideBottom && i === currentTetraBottomFaceIndex;
-        face.mesh.visible = !isBottom;
-        face.edge.visible = !isBottom;
+    function getPieceVertexWorld(piece, vertexId) {
+      return rawTetraVertices[vertexId].clone().applyMatrix4(piece.group.matrixWorld);
+    }
+
+    function updatePieceVisibility(piece, { hideBottom = true } = {}) {
+      piece.faceMeshes.forEach((mesh, i) => {
+        const hidden = hideBottom && i === piece.bottomFaceIndex;
+        mesh.visible = !hidden;
       });
-      tetraMarker.visible = !(hideBottom && currentTetraBottomFaceIndex === SPECIAL_TETRA_FACE);
+      piece.edgeLines.forEach((line, i) => {
+        const hidden = hideBottom && i === piece.bottomFaceIndex;
+        line.visible = !hidden;
+      });
     }
 
-    function applyTetraPose(octaFaceIndex, tetraBottomFaceIndex, map) {
-      const pose = poseForMapping(octaFaceIndex, tetraBottomFaceIndex, map);
-      tetraGroup.position.copy(pose.pos);
-      tetraGroup.quaternion.copy(pose.quat);
-      tetraGroup.updateMatrixWorld(true);
-      updateTetraFaceVisibility();
+    function makePieceFaceMaterial(color, selected = false) {
+      return new THREE.MeshStandardMaterial({
+        color,
+        emissive: selected ? 0x1b4034 : 0x000000,
+        roughness: 0.36,
+        metalness: 0.08,
+        side: THREE.DoubleSide,
+        transparent: false,
+        opacity: 1
+      });
     }
 
-    function updateFaceMaterials() {
-      // Sin iluminación de caras vecinas/actuales: el juego se lee solo por la T objetivo
-      // y la T oculta del tetraedro.
-      octaFaces.forEach(face => { face.mesh.material = face.material; });
+    function setPieceSelected(piece, selected) {
+      piece.selected = selected;
+      piece.edgeLines.forEach(line => {
+        line.material.color.set(selected ? 0xffffff : 0x05070b);
+        line.material.opacity = selected ? 0.95 : 0.50;
+      });
+      piece.faceMeshes.forEach((mesh, i) => {
+        const c = RUBIK_COLORS[piece.faceColorIndices[i]].color;
+        mesh.material.color.set(c);
+        mesh.material.emissive.set(selected ? 0x14382d : 0x000000);
+      });
+      updatePieceVisibility(piece);
     }
 
-    function updateHUD() {
-      scoreEl.textContent = String(score);
-      movesEl.textContent = String(moves);
+    function selectPiece(pieceId) {
+      selectedPieceId = pieceId;
+      pieces.forEach(p => setPieceSelected(p, p.id === pieceId));
+      updateHUD();
     }
 
-    function isNeighbor(target) {
-      return octaFaces[currentOctaFaceIndex].neighbors.some(n => n.faceIndex === target);
-    }
+    function createRubikPiece(id, octaFaceIndex) {
+      const group = new THREE.Group();
+      group.userData.type = 'pieceGroup';
+      group.userData.pieceId = id;
+      piecesGroup.add(group);
 
-    function getNeighborData(target) {
-      return octaFaces[currentOctaFaceIndex].neighbors.find(n => n.faceIndex === target);
-    }
+      const piece = {
+        id,
+        group,
+        octaFaceIndex,
+        bottomFaceIndex: 0,
+        contactMap: makeContactMap(octaFaceIndex, 0, 0),
+        faceMeshes: [],
+        edgeLines: [],
+        faceColorIndices: [0, 1, 2, 3],
+        selected: false,
+        solvedFaceIndex: octaFaceIndex,
+        solvedContactMap: null
+      };
 
-    function easeInOutCubic(t) {
-      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-    }
+      // Coloca provisionalmente para poder colorear las caras según su normal mundial resuelta.
+      applyPiecePose(piece);
 
-    function computeRollState(target) {
-      const neighbor = getNeighborData(target);
-      const currentBottom = tetraFaces[currentTetraBottomFaceIndex];
-      const sharedOctaIds = neighbor.edgeVertexIds;
-      const sharedTetraIds = currentBottom.ids.filter(tid => sharedOctaIds.includes(contactMap.get(tid)));
-      if (sharedTetraIds.length !== 2) return null;
-      const newBottomFace = tetraFaces.find(face => face.index !== currentTetraBottomFaceIndex && sharedTetraIds.every(tid => face.ids.includes(tid)));
-      if (!newBottomFace) return null;
-      const targetFace = octaFaces[target];
-      const targetThirdOctaId = targetFace.ids.find(oid => !sharedOctaIds.includes(oid));
-      const newThirdTetraId = newBottomFace.ids.find(tid => !sharedTetraIds.includes(tid));
-      const newMap = new Map();
-      sharedTetraIds.forEach(tid => newMap.set(tid, contactMap.get(tid)));
-      newMap.set(newThirdTetraId, targetThirdOctaId);
-      return { newBottomFaceIndex: newBottomFace.index, newMap, sharedTetraIds, neighbor };
+      tetraFaces.forEach((face, faceIndex) => {
+        const worldNormal = getPieceFaceWorldNormal(piece, faceIndex);
+        piece.faceColorIndices[faceIndex] = colorIndexForDirection(worldNormal);
+      });
+
+      group.clear();
+      piece.faceMeshes = [];
+      piece.edgeLines = [];
+
+      tetraFaces.forEach((face, faceIndex) => {
+        const material = makePieceFaceMaterial(RUBIK_COLORS[piece.faceColorIndices[faceIndex]].color);
+        const [a, b, c] = face.vertices;
+        const mesh = makeTriangleMesh(a, b, c, material);
+        mesh.userData.type = 'pieceFace';
+        mesh.userData.pieceId = id;
+        mesh.userData.faceIndex = faceIndex;
+        group.add(mesh);
+        piece.faceMeshes.push(mesh);
+
+        const edge = makeTruncatedEdgeLine(a, b, c, 0x05070b, 0.50);
+        edge.userData.type = 'pieceEdge';
+        edge.userData.pieceId = id;
+        group.add(edge);
+        piece.edgeLines.push(edge);
+      });
+
+      addFlatTruncationCaps(group, rawTetraVertices, tetraFaceVertexIndices, 0x1f2b3f, FACE_CUT, { type: 'pieceCap', pieceId: id });
+
+      applyPiecePose(piece);
+      piece.solvedContactMap = new Map(piece.contactMap);
+      return piece;
     }
 
     function transformByAxis(point, quat, pivot) {
@@ -645,7 +604,7 @@
       return Math.abs(point.x) + Math.abs(point.y) + Math.abs(point.z) - OCTA_R;
     }
 
-    function minTetraOutsideMarginForRotation(startPos, startQuat, axis, pivot, angle) {
+    function minPieceOutsideMarginForRotation(piece, startPos, startQuat, axis, pivot, angle) {
       const q = new THREE.Quaternion().setFromAxisAngle(axis, angle);
       let minMargin = Infinity;
       for (const v of rawTetraVertices) {
@@ -656,126 +615,139 @@
       return minMargin;
     }
 
-    function chooseExteriorRollAngle(baseAngle, startPos, startQuat, axis, pivot) {
+    function chooseExteriorRollAngle(piece, baseAngle, startPos, startQuat, axis, pivot) {
       const candidates = [baseAngle, baseAngle + Math.PI * 2, baseAngle - Math.PI * 2];
       let bestAngle = baseAngle;
       let bestScore = -Infinity;
       for (const candidate of candidates) {
         const score = Math.min(
-          minTetraOutsideMarginForRotation(startPos, startQuat, axis, pivot, candidate * 0.25),
-          minTetraOutsideMarginForRotation(startPos, startQuat, axis, pivot, candidate * 0.50),
-          minTetraOutsideMarginForRotation(startPos, startQuat, axis, pivot, candidate * 0.75)
+          minPieceOutsideMarginForRotation(piece, startPos, startQuat, axis, pivot, candidate * 0.25),
+          minPieceOutsideMarginForRotation(piece, startPos, startQuat, axis, pivot, candidate * 0.50),
+          minPieceOutsideMarginForRotation(piece, startPos, startQuat, axis, pivot, candidate * 0.75)
         ) - Math.abs(candidate) * 0.0001;
         if (score > bestScore) { bestScore = score; bestAngle = candidate; }
       }
       return bestAngle;
     }
 
-    function tangentDirectionOfPlane(plane, faceNormal) {
-      scene.updateMatrixWorld(true);
-      const dir = new THREE.Vector3(0, 1, 0).transformDirection(plane.matrixWorld).normalize();
-      const tangent = dir.sub(faceNormal.clone().multiplyScalar(dir.dot(faceNormal)));
-      if (tangent.lengthSq() < 0.000001) return new THREE.Vector3(0, 0, 0);
-      return tangent.normalize();
+    function computePieceRollState(piece, targetFaceIndex) {
+      const currentFace = octaFaces[piece.octaFaceIndex];
+      const neighbor = currentFace.neighbors.find(n => n.faceIndex === targetFaceIndex);
+      if (!neighbor) return null;
+
+      const currentBottom = tetraFaces[piece.bottomFaceIndex];
+      const sharedOctaIds = neighbor.edgeVertexIds;
+      const sharedTetraIds = currentBottom.ids.filter(tid => sharedOctaIds.includes(piece.contactMap.get(tid)));
+      if (sharedTetraIds.length !== 2) return null;
+
+      const newBottomFace = tetraFaces.find(face => face.index !== piece.bottomFaceIndex && sharedTetraIds.every(tid => face.ids.includes(tid)));
+      if (!newBottomFace) return null;
+
+      const targetFace = octaFaces[targetFaceIndex];
+      const targetThirdOctaId = targetFace.ids.find(oid => !sharedOctaIds.includes(oid));
+      const newThirdTetraId = newBottomFace.ids.find(tid => !sharedTetraIds.includes(tid));
+
+      const newMap = new Map();
+      sharedTetraIds.forEach(tid => newMap.set(tid, piece.contactMap.get(tid)));
+      newMap.set(newThirdTetraId, targetThirdOctaId);
+      return { newBottomFaceIndex: newBottomFace.index, newMap, sharedTetraIds, neighbor };
     }
 
-    function checkMatch() {
-      updateHUD();
-      if (currentOctaFaceIndex !== targetFaceIndex) return;
-      if (currentTetraBottomFaceIndex !== SPECIAL_TETRA_FACE) return;
-
-      const faceNormal = octaFaces[currentOctaFaceIndex].normal.clone();
-      const targetUp = tangentDirectionOfPlane(targetMarker, faceNormal);
-      const tetraUp = tangentDirectionOfPlane(tetraMarker, faceNormal);
-
-      const same = tetraUp.dot(targetUp);
-      const opposite = tetraUp.dot(targetUp.clone().negate());
-
-      // En algunos móviles/cámaras es difícil saber si la lectura correcta es face-to-face
-      // o screen-facing. Para no depender de una convención errónea, mostramos ambos valores
-      // y aceptamos el alineamiento visual fuerte en cualquiera de los dos sentidos.
-      // Si quieres hacerlo más estricto luego, deja solo `opposite > 0.82`.
-      const alignment = Math.max(same, opposite);
-      console.log('Check T match', {
-        targetFace: targetFaceIndex,
-        targetOrientation,
-        same: Number(same.toFixed(4)),
-        opposite: Number(opposite.toFixed(4)),
-        alignment: Number(alignment.toFixed(4)),
-        rule: 'match si max(same, opposite) > 0.82'
-      });
-
-      if (alignment < 0.82) return;
-
-      score += 1;
-      flashTarget();
-      updateHUD();
-      spawnTarget();
+    function canPieceRollTo(piece, targetFaceIndex) {
+      if (occupiedFaceToPiece.has(targetFaceIndex)) return false;
+      return octaFaces[piece.octaFaceIndex].neighbors.some(n => n.faceIndex === targetFaceIndex);
     }
 
-    function flashTarget() {
-      targetMarker.scale.multiplyScalar(1.22);
-      setTimeout(() => targetMarker.scale.multiplyScalar(1 / 1.22), 120);
-    }
-
-    function spawnTarget() {
-      const available = octaFaces.map(f => f.index).filter(i => i !== currentOctaFaceIndex);
-      targetFaceIndex = available[Math.floor(Math.random() * available.length)];
-      targetOrientation = Math.floor(Math.random() * 3);
-      const f = octaFaces[targetFaceIndex];
-      attachPlaneToTriangle(targetMarker, f.vertices[0], f.vertices[1], f.vertices[2], f.normal, targetOrientation, 0.030);
-      updateHUD();
-    }
-
-    function rollToFace(target) {
+    function rollPieceToFace(piece, targetFaceIndex) {
       if (isAnimating) return;
-      if (!isNeighbor(target)) return;
-      const rollState = computeRollState(target);
+      if (!canPieceRollTo(piece, targetFaceIndex)) return;
+      const rollState = computePieceRollState(piece, targetFaceIndex);
       if (!rollState) return;
 
       isAnimating = true;
-      updateTetraFaceVisibility({ hideBottom: false });
+      updatePieceVisibility(piece, { hideBottom: false });
 
-      tetraGroup.updateMatrixWorld(true);
-      const edgeWorldA = getTetraVertexWorld(rollState.sharedTetraIds[0]);
-      const edgeWorldB = getTetraVertexWorld(rollState.sharedTetraIds[1]);
+      piece.group.updateMatrixWorld(true);
+      const edgeWorldA = getPieceVertexWorld(piece, rollState.sharedTetraIds[0]);
+      const edgeWorldB = getPieceVertexWorld(piece, rollState.sharedTetraIds[1]);
       const axis = new THREE.Vector3().subVectors(edgeWorldB, edgeWorldA).normalize();
       const pivot = edgeWorldA.clone();
-      const startPos = tetraGroup.position.clone();
-      const startQuat = tetraGroup.quaternion.clone();
-      const newBottomNormalNow = getTetraFaceWorldNormal(rollState.newBottomFaceIndex);
-      const requiredBottomNormal = octaFaces[target].normal.clone().negate();
+      const startPos = piece.group.position.clone();
+      const startQuat = piece.group.quaternion.clone();
+      const newBottomNormalNow = getPieceFaceWorldNormal(piece, rollState.newBottomFaceIndex);
+      const requiredBottomNormal = octaFaces[targetFaceIndex].normal.clone().negate();
       const baseAngle = signedAngleAroundAxis(newBottomNormalNow, requiredBottomNormal, axis);
-      const angle = chooseExteriorRollAngle(baseAngle, startPos, startQuat, axis, pivot);
-      const endPose = poseForMapping(target, rollState.newBottomFaceIndex, rollState.newMap);
+      const angle = chooseExteriorRollAngle(piece, baseAngle, startPos, startQuat, axis, pivot);
+      const endPose = poseForMapping(targetFaceIndex, rollState.newBottomFaceIndex, rollState.newMap);
+
       const duration = 720;
       const startTime = performance.now();
+      const oldFaceIndex = piece.octaFaceIndex;
 
       function animateRoll(now) {
         const rawT = Math.min(1, (now - startTime) / duration);
         const t = easeInOutCubic(rawT);
         const q = new THREE.Quaternion().setFromAxisAngle(axis, angle * t);
-        tetraGroup.position.copy(transformByAxis(startPos, q, pivot));
-        tetraGroup.quaternion.copy(q.clone().multiply(startQuat));
-        tetraGroup.updateMatrixWorld(true);
+        piece.group.position.copy(transformByAxis(startPos, q, pivot));
+        piece.group.quaternion.copy(q.clone().multiply(startQuat));
+        piece.group.updateMatrixWorld(true);
+
         if (rawT < 1) {
           requestAnimationFrame(animateRoll);
         } else {
-          currentOctaFaceIndex = target;
-          currentTetraBottomFaceIndex = rollState.newBottomFaceIndex;
-          contactMap = rollState.newMap;
-          tetraGroup.position.copy(endPose.pos);
-          tetraGroup.quaternion.copy(endPose.quat);
-          tetraGroup.updateMatrixWorld(true);
-          updateTetraFaceVisibility();
+          occupiedFaceToPiece.delete(oldFaceIndex);
+          occupiedFaceToPiece.set(targetFaceIndex, piece.id);
+          piece.octaFaceIndex = targetFaceIndex;
+          piece.bottomFaceIndex = rollState.newBottomFaceIndex;
+          piece.contactMap = rollState.newMap;
+          piece.group.position.copy(endPose.pos);
+          piece.group.quaternion.copy(endPose.quat);
+          piece.group.updateMatrixWorld(true);
+          updatePieceVisibility(piece);
           moves += 1;
-          updateFaceMaterials();
           updateHUD();
           isAnimating = false;
-          checkMatch();
+          checkSolvedState();
         }
       }
       requestAnimationFrame(animateRoll);
+    }
+
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function updateHUD() {
+      selectedPieceEl.textContent = selectedPieceId == null ? '—' : `T${selectedPieceId + 1}`;
+      movesEl.textContent = String(moves);
+    }
+
+    function checkSolvedState() {
+      const solved = pieces.every(piece => {
+        if (piece.octaFaceIndex !== piece.solvedFaceIndex) return false;
+        for (const [tid, oid] of piece.solvedContactMap.entries()) {
+          if (piece.contactMap.get(tid) !== oid) return false;
+        }
+        return true;
+      });
+      if (solved && moves > 0) console.log('Figura resuelta');
+    }
+
+    function initRubikMode() {
+      piecesGroup.clear();
+      pieces.length = 0;
+      occupiedFaceToPiece.clear();
+      selectedPieceId = null;
+      moves = 0;
+
+      SOLVED_FACE_INDICES.forEach((faceIndex, id) => {
+        const piece = createRubikPiece(id, faceIndex);
+        pieces.push(piece);
+        occupiedFaceToPiece.set(faceIndex, id);
+      });
+
+      selectPiece(0);
+      updateHUD();
     }
 
     let pointerStart = null;
@@ -784,6 +756,21 @@
 
     function onPointerDown(event) {
       pointerStart = { x: event.clientX, y: event.clientY, time: performance.now() };
+    }
+
+    function findPieceInHits(hits) {
+      for (const hit of hits) {
+        const id = hit.object?.userData?.pieceId;
+        if (id !== undefined) return pieces[id];
+      }
+      return null;
+    }
+
+    function findOctaFaceInHits(hits) {
+      for (const hit of hits) {
+        if (hit.object?.userData?.type === 'octaFace') return hit.object.userData.faceIndex;
+      }
+      return null;
     }
 
     function onPointerUp(event) {
@@ -795,34 +782,44 @@
       const wasTap = dist <= TAP_MAX_DISTANCE && dt <= TAP_MAX_TIME;
       pointerStart = null;
       if (!wasTap) return;
+
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
-      const hits = raycaster.intersectObjects(octaFaces.map(f => f.mesh), false);
-      if (!hits.length) return;
-      const faceIndex = hits[0].object.userData.faceIndex;
-      if (faceIndex === currentOctaFaceIndex) return;
-      if (!isNeighbor(faceIndex)) return;
-      rollToFace(faceIndex);
-    }
 
-    function resetGame() {
-      currentOctaFaceIndex = 0;
-      currentTetraBottomFaceIndex = SPECIAL_TETRA_FACE;
-      moves = 0;
-      score = 0;
-      isAnimating = false;
-      contactMap = makeContactMap(currentOctaFaceIndex, currentTetraBottomFaceIndex, 0);
-      applyTetraPose(currentOctaFaceIndex, currentTetraBottomFaceIndex, contactMap);
-      spawnTarget();
-      updateFaceMaterials();
-      updateHUD();
+      const pieceHits = raycaster.intersectObjects(piecesGroup.children, true);
+      const hitPiece = findPieceInHits(pieceHits);
+      if (hitPiece) {
+        selectPiece(hitPiece.id);
+        return;
+      }
+
+      const faceHits = raycaster.intersectObjects(octaFaces.map(f => f.mesh), false);
+      const faceIndex = findOctaFaceInHits(faceHits);
+      if (faceIndex == null) return;
+      if (occupiedFaceToPiece.has(faceIndex)) return;
+
+      if (selectedPieceId != null) {
+        const selected = pieces[selectedPieceId];
+        if (canPieceRollTo(selected, faceIndex)) {
+          rollPieceToFace(selected, faceIndex);
+          return;
+        }
+      }
+
+      const candidates = pieces.filter(p => canPieceRollTo(p, faceIndex));
+      if (candidates.length === 1) {
+        selectPiece(candidates[0].id);
+        rollPieceToFace(candidates[0], faceIndex);
+      } else if (candidates.length > 1) {
+        console.log('Hay varios tetraedros que pueden rodar a esa cara: selecciona primero una pieza.', candidates.map(p => p.id));
+      }
     }
 
     renderer.domElement.addEventListener('pointerdown', onPointerDown, { passive: true });
     renderer.domElement.addEventListener('pointerup', onPointerUp, { passive: true });
-    resetBtn.addEventListener('click', resetGame);
+    resetBtn.addEventListener('click', initRubikMode);
 
     function addAtmosphere() {
       const starGeom = new THREE.BufferGeometry();
@@ -839,7 +836,7 @@
     }
 
     addAtmosphere();
-    resetGame();
+    initRubikMode();
 
     function onResize() {
       camera.aspect = window.innerWidth / window.innerHeight;
