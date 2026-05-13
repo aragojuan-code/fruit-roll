@@ -98,8 +98,10 @@
       <span>Empieza resuelto. Tap en tetraedro = seleccionar · tap en cara vacía vecina = rodar</span>
     </div>
     <div class="stats">
-      <div class="pill">Seleccionado: <b id="selectedPiece">—</b></div>
+      <div class="pill">Modo: <b id="modeLabel">Rubik</b></div>
+      <div class="pill">Sel/Puntos: <b id="selectedPiece">—</b></div>
       <div class="pill">Movs: <b id="moves">0</b></div>
+      <button id="modeBtn">Cambiar modo</button>
       <button id="resetBtn">Reset</button>
     </div>
   </div>
@@ -122,8 +124,10 @@
     import { TrackballControls } from 'three/addons/controls/TrackballControls.js';
 
     const app = document.getElementById('app');
+    const modeLabelEl = document.getElementById('modeLabel');
     const selectedPieceEl = document.getElementById('selectedPiece');
     const movesEl = document.getElementById('moves');
+    const modeBtn = document.getElementById('modeBtn');
     const resetBtn = document.getElementById('resetBtn');
 
     const scene = new THREE.Scene();
@@ -193,6 +197,9 @@
 
     // Caras alternas. Con tetraedros sobre estas 4 caras, la figura empieza como un tetraedro grande resuelto.
     const SOLVED_FACE_INDICES = [0, 2, 5, 7];
+    // Estas 4 caras son las caras visibles del octaedro central cuando la figura está resuelta.
+    // Sus normales definen los 4 colores de las “grandes caras” del tetraedro final.
+    const COLOR_FACE_INDICES = [1, 3, 4, 6];
 
     const rawTetraVertices = [
       new THREE.Vector3( 1,  1,  1),
@@ -212,10 +219,15 @@
     const octaFaces = [];
     const pieces = [];
     const occupiedFaceToPiece = new Map();
+    let targetMarker = null;
 
+    let gameMode = 'rubik'; // 'rubik' o 't'
     let selectedPieceId = null;
     let moves = 0;
+    let score = 0;
     let isAnimating = false;
+    let targetFaceIndex = 1;
+    let targetOrientation = 0;
 
     function faceNormal(a, b, c) {
       return new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).normalize();
@@ -255,6 +267,48 @@
       const geom = new THREE.BufferGeometry().setFromPoints(points);
       const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
       return new THREE.LineLoop(geom, mat);
+    }
+
+    function makeTextPlane(text, options = {}) {
+      const { fontSize = 150, color = '#ffffff', stroke = 'rgba(0,0,0,0.82)', padding = 18, scale = 0.00235 } = options;
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.font = `950 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
+      const metrics = ctx.measureText(text);
+      canvas.width = Math.ceil(metrics.width + padding * 2);
+      canvas.height = Math.ceil(fontSize + padding * 2);
+      ctx.font = `950 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = Math.max(12, fontSize * 0.13);
+      ctx.strokeStyle = stroke;
+      ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 3);
+      ctx.fillStyle = color;
+      ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 3);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      const material = new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        side: THREE.DoubleSide
+      });
+      const geometry = new THREE.PlaneGeometry(canvas.width * scale, canvas.height * scale);
+      return new THREE.Mesh(geometry, material);
+    }
+
+    function attachPlaneToTriangle(plane, a, b, c, normal, orientation = 0, offset = 0.020) {
+      const center = faceCenter(a, b, c);
+      const angle = orientation * (Math.PI * 2 / 3);
+      const baseX = new THREE.Vector3().subVectors(b, a).normalize();
+      const xAxis = baseX.clone().applyAxisAngle(normal, angle).normalize();
+      const yAxis = new THREE.Vector3().crossVectors(normal, xAxis).normalize();
+      const basis = new THREE.Matrix4().makeBasis(xAxis, yAxis, normal);
+      plane.quaternion.setFromRotationMatrix(basis);
+      plane.position.copy(center).addScaledVector(normal, offset);
     }
 
     function makeFlatCap(points, material) {
@@ -336,10 +390,13 @@
     buildTetraFaceData();
 
     function colorIndexForDirection(normal) {
+      // Color por gran cara del tetraedro final.
+      // Usamos valor absoluto para que cada par de caras opuestas del octaedro tenga el mismo color.
+      // Así el octaedro queda equilibrado: 2 azules, 2 verdes, 2 rojas y 2 amarillas.
       let best = 0;
       let bestDot = -Infinity;
-      for (let i = 0; i < SOLVED_FACE_INDICES.length; i++) {
-        const d = normal.dot(octaFaces[SOLVED_FACE_INDICES[i]].normal);
+      for (let i = 0; i < COLOR_FACE_INDICES.length; i++) {
+        const d = Math.abs(normal.dot(octaFaces[COLOR_FACE_INDICES[i]].normal));
         if (d > bestDot) { bestDot = d; best = i; }
       }
       return best;
@@ -392,6 +449,10 @@
       });
 
       addFlatTruncationCaps(boardGroup, octaVertices, octaFaceVertexIndices, 0x1f2b3f);
+
+      targetMarker = makeTextPlane('T', { color: '#ffe66d', stroke: 'rgba(0,0,0,0.82)', fontSize: 150, scale: 0.00235 });
+      targetMarker.visible = false;
+      boardGroup.add(targetMarker);
     }
 
     function sharedVertices(faceA, faceB) {
@@ -496,6 +557,9 @@
         const hidden = hideBottom && i === piece.bottomFaceIndex;
         line.visible = !hidden;
       });
+      if (piece.tMarker) {
+        piece.tMarker.visible = gameMode === 't' && !(hideBottom && piece.bottomFaceIndex === 0);
+      }
     }
 
     function makePieceFaceMaterial(color, selected = false) {
@@ -553,6 +617,8 @@
       // Coloca provisionalmente para poder colorear las caras según su normal mundial resuelta.
       applyPiecePose(piece);
 
+      // En la posición resuelta, cada cara del tetraedro toma el color de la gran cara
+      // hacia la que mira. Esto hace que la figura empiece realmente terminada.
       tetraFaces.forEach((face, faceIndex) => {
         const worldNormal = getPieceFaceWorldNormal(piece, faceIndex);
         piece.faceColorIndices[faceIndex] = colorIndexForDirection(worldNormal);
@@ -580,6 +646,12 @@
       });
 
       addFlatTruncationCaps(group, rawTetraVertices, tetraFaceVertexIndices, 0x1f2b3f, FACE_CUT, { type: 'pieceCap', pieceId: id });
+
+      piece.tMarker = makeTextPlane('T', { color: '#ffffff', stroke: 'rgba(0,0,0,0.86)', fontSize: 150, scale: 0.0022 });
+      const special = tetraFaces[0];
+      attachPlaneToTriangle(piece.tMarker, special.vertices[0], special.vertices[1], special.vertices[2], special.normal, 0, 0.020);
+      piece.tMarker.visible = gameMode === 't';
+      group.add(piece.tMarker);
 
       applyPiecePose(piece);
       piece.solvedContactMap = new Map(piece.contactMap);
@@ -707,7 +779,8 @@
           moves += 1;
           updateHUD();
           isAnimating = false;
-          checkSolvedState();
+          if (gameMode === 't') checkTMatch();
+          else checkSolvedState();
         }
       }
       requestAnimationFrame(animateRoll);
@@ -718,7 +791,10 @@
     }
 
     function updateHUD() {
-      selectedPieceEl.textContent = selectedPieceId == null ? '—' : `T${selectedPieceId + 1}`;
+      modeLabelEl.textContent = gameMode === 'rubik' ? 'Rubik' : 'T';
+      selectedPieceEl.textContent = gameMode === 'rubik'
+        ? (selectedPieceId == null ? '—' : `T${selectedPieceId + 1}`)
+        : String(score);
       movesEl.textContent = String(moves);
     }
 
@@ -733,12 +809,49 @@
       if (solved && moves > 0) console.log('Figura resuelta');
     }
 
+    function tangentDirectionOfPlane(plane, faceNormal) {
+      scene.updateMatrixWorld(true);
+      const dir = new THREE.Vector3(0, 1, 0).transformDirection(plane.matrixWorld).normalize();
+      const tangent = dir.sub(faceNormal.clone().multiplyScalar(dir.dot(faceNormal)));
+      if (tangent.lengthSq() < 0.000001) return new THREE.Vector3(0, 0, 0);
+      return tangent.normalize();
+    }
+
+    function spawnTTarget() {
+      const current = pieces[0]?.octaFaceIndex ?? 0;
+      const available = octaFaces.map(f => f.index).filter(i => i !== current);
+      targetFaceIndex = available[Math.floor(Math.random() * available.length)];
+      targetOrientation = Math.floor(Math.random() * 3);
+      const f = octaFaces[targetFaceIndex];
+      attachPlaneToTriangle(targetMarker, f.vertices[0], f.vertices[1], f.vertices[2], f.normal, targetOrientation, 0.030);
+      targetMarker.visible = true;
+    }
+
+    function checkTMatch() {
+      if (gameMode !== 't') return;
+      const piece = pieces[0];
+      if (!piece) return;
+      if (piece.octaFaceIndex !== targetFaceIndex) return;
+      if (piece.bottomFaceIndex !== 0) return;
+      const faceNormal = octaFaces[targetFaceIndex].normal.clone();
+      const targetUp = tangentDirectionOfPlane(targetMarker, faceNormal);
+      const tetraUp = tangentDirectionOfPlane(piece.tMarker, faceNormal);
+      const alignment = Math.max(tetraUp.dot(targetUp), tetraUp.dot(targetUp.clone().negate()));
+      if (alignment < 0.82) return;
+      score += 1;
+      spawnTTarget();
+      updateHUD();
+    }
+
     function initRubikMode() {
+      gameMode = 'rubik';
+      targetMarker.visible = false;
       piecesGroup.clear();
       pieces.length = 0;
       occupiedFaceToPiece.clear();
       selectedPieceId = null;
       moves = 0;
+      score = 0;
 
       SOLVED_FACE_INDICES.forEach((faceIndex, id) => {
         const piece = createRubikPiece(id, faceIndex);
@@ -750,6 +863,27 @@
       updateHUD();
     }
 
+    function initTMode() {
+      gameMode = 't';
+      piecesGroup.clear();
+      pieces.length = 0;
+      occupiedFaceToPiece.clear();
+      selectedPieceId = null;
+      moves = 0;
+      score = 0;
+      const piece = createRubikPiece(0, 0);
+      pieces.push(piece);
+      occupiedFaceToPiece.set(0, 0);
+      selectPiece(0);
+      spawnTTarget();
+      updateHUD();
+    }
+
+    function toggleMode() {
+      if (gameMode === 'rubik') initTMode();
+      else initRubikMode();
+    }
+
     let pointerStart = null;
     const TAP_MAX_DISTANCE = 8;
     const TAP_MAX_TIME = 450;
@@ -759,11 +893,22 @@
     }
 
     function findPieceInHits(hits) {
-      for (const hit of hits) {
-        const id = hit.object?.userData?.pieceId;
-        if (id !== undefined) return pieces[id];
-      }
-      return null;
+      // Solo aceptamos MESHES de piezas, no líneas de borde. Las líneas del tetraedro
+      // seleccionado pueden cruzar visualmente otra pieza y robar el tap.
+      const validHits = hits.filter(hit => {
+        const obj = hit.object;
+        if (!obj || !obj.visible) return false;
+        if (!obj.isMesh) return false;
+        if (obj.userData?.pieceId === undefined) return false;
+        if (obj.userData?.type === 'pieceEdge') return false;
+        return true;
+      });
+
+      if (!validHits.length) return null;
+
+      // Si hay varias piezas bajo el tap, escogemos la pieza con el hit más cercano real.
+      validHits.sort((a, b) => a.distance - b.distance);
+      return pieces[validHits[0].object.userData.pieceId] ?? null;
     }
 
     function findOctaFaceInHits(hits) {
@@ -788,6 +933,27 @@
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
 
+      const faceHits = raycaster.intersectObjects(octaFaces.map(f => f.mesh), false);
+      const faceIndex = findOctaFaceInHits(faceHits);
+
+      // Primero intentamos mover a una cara vacía. Así, si la pieza visualmente tapa parte
+      // del click, no roba el tap destinado a la cara del octaedro.
+      if (faceIndex != null && !occupiedFaceToPiece.has(faceIndex)) {
+        if (gameMode === 't') {
+          const p = pieces[0];
+          if (p && canPieceRollTo(p, faceIndex)) {
+            rollPieceToFace(p, faceIndex);
+            return;
+          }
+        } else if (selectedPieceId != null) {
+          const selected = pieces[selectedPieceId];
+          if (selected && canPieceRollTo(selected, faceIndex)) {
+            rollPieceToFace(selected, faceIndex);
+            return;
+          }
+        }
+      }
+
       const pieceHits = raycaster.intersectObjects(piecesGroup.children, true);
       const hitPiece = findPieceInHits(pieceHits);
       if (hitPiece) {
@@ -795,31 +961,24 @@
         return;
       }
 
-      const faceHits = raycaster.intersectObjects(octaFaces.map(f => f.mesh), false);
-      const faceIndex = findOctaFaceInHits(faceHits);
-      if (faceIndex == null) return;
-      if (occupiedFaceToPiece.has(faceIndex)) return;
-
-      if (selectedPieceId != null) {
-        const selected = pieces[selectedPieceId];
-        if (canPieceRollTo(selected, faceIndex)) {
-          rollPieceToFace(selected, faceIndex);
-          return;
+      if (gameMode === 'rubik' && faceIndex != null && !occupiedFaceToPiece.has(faceIndex)) {
+        const candidates = pieces.filter(p => canPieceRollTo(p, faceIndex));
+        if (candidates.length === 1) {
+          selectPiece(candidates[0].id);
+          rollPieceToFace(candidates[0], faceIndex);
+        } else if (candidates.length > 1) {
+          console.log('Hay varios tetraedros que pueden rodar a esa cara: selecciona primero una pieza.', candidates.map(p => p.id));
         }
-      }
-
-      const candidates = pieces.filter(p => canPieceRollTo(p, faceIndex));
-      if (candidates.length === 1) {
-        selectPiece(candidates[0].id);
-        rollPieceToFace(candidates[0], faceIndex);
-      } else if (candidates.length > 1) {
-        console.log('Hay varios tetraedros que pueden rodar a esa cara: selecciona primero una pieza.', candidates.map(p => p.id));
       }
     }
 
     renderer.domElement.addEventListener('pointerdown', onPointerDown, { passive: true });
     renderer.domElement.addEventListener('pointerup', onPointerUp, { passive: true });
-    resetBtn.addEventListener('click', initRubikMode);
+    modeBtn.addEventListener('click', toggleMode);
+    resetBtn.addEventListener('click', () => {
+      if (gameMode === 'rubik') initRubikMode();
+      else initTMode();
+    });
 
     function addAtmosphere() {
       const starGeom = new THREE.BufferGeometry();
