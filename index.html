@@ -594,6 +594,12 @@
       updateHUD();
     }
 
+    function deselectAll() {
+      selectedPieceId = null;
+      pieces.forEach(p => setPieceSelected(p, false));
+      updateHUD();
+    }
+
     function createRubikPiece(id, octaFaceIndex) {
       const group = new THREE.Group();
       group.userData.type = 'pieceGroup';
@@ -935,6 +941,13 @@
 
       const faceHits = raycaster.intersectObjects(octaFaces.map(f => f.mesh), false);
       const faceIndex = findOctaFaceInHits(faceHits);
+
+      // Tap fuera de la figura: deselecciona todo para ver la pieza limpia.
+      // Solo lo hacemos en modo Rubik, porque en modo T la selección no importa.
+      if (gameMode === 'rubik' && !pieceHits.length && !faceHits.length) {
+        deselectAll();
+        return;
+      }
 
       // Primero intentamos mover a una cara vacía. Así, si la pieza visualmente tapa parte
       // del click, no roba el tap destinado a la cara del octaedro.
