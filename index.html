@@ -939,12 +939,12 @@
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
 
+      const pieceHits = raycaster.intersectObjects(piecesGroup.children, true);
       const faceHits = raycaster.intersectObjects(octaFaces.map(f => f.mesh), false);
       const faceIndex = findOctaFaceInHits(faceHits);
 
       // Tap fuera de la figura: deselecciona todo para ver la pieza limpia.
-      // Solo lo hacemos en modo Rubik, porque en modo T la selección no importa.
-      if (gameMode === 'rubik' && !pieceHits.length && !faceHits.length) {
+      if (gameMode === 'rubik' && pieceHits.length === 0 && faceHits.length === 0) {
         deselectAll();
         return;
       }
@@ -967,7 +967,6 @@
         }
       }
 
-      const pieceHits = raycaster.intersectObjects(piecesGroup.children, true);
       const hitPiece = findPieceInHits(pieceHits);
       if (hitPiece) {
         selectPiece(hitPiece.id);
